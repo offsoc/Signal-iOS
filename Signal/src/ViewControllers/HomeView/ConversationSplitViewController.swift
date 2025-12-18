@@ -78,6 +78,9 @@ class ConversationSplitViewController: UISplitViewController, ConversationSplit 
         delegate = self
         preferredDisplayMode = .oneBesideSecondary
         presentsWithGesture = false
+
+        minimumPrimaryColumnWidth = 280
+        maximumPrimaryColumnWidth = 400
         preferredPrimaryColumnWidthFraction = 0.42
 
         NotificationCenter.default.addObserver(self, selector: #selector(applyTheme), name: .themeDidChange, object: nil)
@@ -96,6 +99,32 @@ class ConversationSplitViewController: UISplitViewController, ConversationSplit 
 
     required init?(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+
+        if DependenciesBridge.shared.tsAccountManager.registrationStateWithMaybeSneakyTransaction.isPrimaryDevice == false {
+            AppEnvironment.shared.deviceTransferServiceRef.addObserver(self)
+            AppEnvironment.shared.deviceTransferServiceRef.startListeningForNewDevices()
+        }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+
+        if let windowScene = view.window?.windowScene, windowScene.activationState == .foregroundActive {
+            lastActiveInterfaceOrientation = windowScene.interfaceOrientation
+        }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+
+        if DependenciesBridge.shared.tsAccountManager.registrationStateWithMaybeSneakyTransaction.isPrimaryDevice == false {
+            AppEnvironment.shared.deviceTransferServiceRef.removeObserver(self)
+            AppEnvironment.shared.deviceTransferServiceRef.stopListeningForNewDevices()
+        }
     }
 
     @objc
@@ -119,19 +148,6 @@ class ConversationSplitViewController: UISplitViewController, ConversationSplit 
         if let windowScene = view.window?.windowScene {
             lastActiveInterfaceOrientation = windowScene.interfaceOrientation
         }
-    }
-
-    @objc
-    private func didStartTransfer() {
-        // Disable the device transfer listener while the new device restore flow is active
-        AppEnvironment.shared.deviceTransferServiceRef.removeObserver(self)
-        AppEnvironment.shared.deviceTransferServiceRef.stopListeningForNewDevices()
-    }
-
-    @objc
-    private func didEndTransfer() {
-        AppEnvironment.shared.deviceTransferServiceRef.addObserver(self)
-        AppEnvironment.shared.deviceTransferServiceRef.startListeningForNewDevices()
     }
 
     func closeSelectedConversation(animated: Bool) {
@@ -546,6 +562,11 @@ class ConversationSplitViewController: UISplitViewController, ConversationSplit 
         homeVC.chatListViewController.showAppSettings()
     }
 
+    @objc
+    func showCameraView(completion: ((UINavigationController) -> Void)? = nil) {
+        homeVC.chatListViewController.presentCameraView(completion: completion)
+    }
+
     func showAppSettingsWithMode(_ mode: ChatListViewController.ShowAppSettingsMode, completion: (() -> Void)? = nil) {
         homeVC.chatListViewController.showAppSettings(mode: mode, completion: completion)
     }
@@ -627,6 +648,23 @@ class ConversationSplitViewController: UISplitViewController, ConversationSplit 
         }
 
         selectedConversationViewController.openGifSearch()
+    }
+
+    @objc
+    private func didStartTransfer() {
+        if DependenciesBridge.shared.tsAccountManager.registrationStateWithMaybeSneakyTransaction.isPrimaryDevice == false {
+            // Disable the device transfer listener while the new device restore flow is active
+            AppEnvironment.shared.deviceTransferServiceRef.removeObserver(self)
+            AppEnvironment.shared.deviceTransferServiceRef.stopListeningForNewDevices()
+        }
+    }
+
+    @objc
+    private func didEndTransfer() {
+        if DependenciesBridge.shared.tsAccountManager.registrationStateWithMaybeSneakyTransaction.isPrimaryDevice == false {
+            AppEnvironment.shared.deviceTransferServiceRef.addObserver(self)
+            AppEnvironment.shared.deviceTransferServiceRef.startListeningForNewDevices()
+        }
     }
 }
 
@@ -738,34 +776,12 @@ private class NoSelectedConversationViewController: OWSViewController {
 }
 
 extension ConversationSplitViewController: DeviceTransferServiceObserver {
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-
-        if !BuildFlags.Backups.registrationFlow {
-            AppEnvironment.shared.deviceTransferServiceRef.addObserver(self)
-            AppEnvironment.shared.deviceTransferServiceRef.startListeningForNewDevices()
-        }
-    }
-
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-
-        if let windowScene = view.window?.windowScene, windowScene.activationState == .foregroundActive {
-            lastActiveInterfaceOrientation = windowScene.interfaceOrientation
-        }
-    }
-
-    override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
-
-        if !BuildFlags.Backups.registrationFlow {
-            AppEnvironment.shared.deviceTransferServiceRef.removeObserver(self)
-            AppEnvironment.shared.deviceTransferServiceRef.stopListeningForNewDevices()
-        }
-    }
-
     func deviceTransferServiceDiscoveredNewDevice(peerId: MCPeerID, discoveryInfo: [String: String]?) {
-        guard deviceTransferNavController?.presentingViewController == nil else { return }
+        guard
+            DependenciesBridge.shared.tsAccountManager.registrationStateWithMaybeSneakyTransaction.isPrimaryDevice == false,
+            deviceTransferNavController?.presentingViewController == nil
+        else { return }
+
         let navController = OutgoingDeviceTransferNavigationController()
         deviceTransferNavController = navController
         navController.present(fromViewController: self)

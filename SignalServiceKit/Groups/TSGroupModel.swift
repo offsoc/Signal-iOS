@@ -174,9 +174,22 @@ public class TSGroupModelV2: TSGroupModel {
             return false
         }
 
+        let avatarHasUserFacingChange: Bool
+        if avatarHash == otherGroupModel.avatarHash {
+            avatarHasUserFacingChange = false
+        } else if
+            otherGroupModel.lowTrustAvatarDownloadWasBlocked,
+            !self.lowTrustAvatarDownloadWasBlocked
+        {
+            // Avatar unblurred. No info message needed
+            avatarHasUserFacingChange = false
+        } else {
+            avatarHasUserFacingChange = true
+        }
+
         guard
             groupName == otherGroupModel.groupName,
-            avatarHash == otherGroupModel.avatarHash,
+            !avatarHasUserFacingChange,
             addedByAddress == otherGroupModel.addedByAddress,
             descriptionText == otherGroupModel.descriptionText,
             membership == otherGroupModel.membership,
@@ -455,9 +468,13 @@ extension TSGroupModel {
 
         var filePaths = Set<String>()
 
-        while let thread = try cursor.next() as? TSGroupThread {
-            guard let avatarHash = thread.groupModel.avatarHash else { continue }
-            filePaths.insert(avatarFilePath(forHash: avatarHash).path)
+        do {
+            while let thread = try cursor.next() as? TSGroupThread {
+                guard let avatarHash = thread.groupModel.avatarHash else { continue }
+                filePaths.insert(avatarFilePath(forHash: avatarHash).path)
+            }
+        } catch {
+            throw error.grdbErrorForLogging
         }
 
         return filePaths

@@ -61,7 +61,7 @@ protocol ConversationInputToolbarDelegate: AnyObject {
 
     func pollButtonPressed()
 
-    func didSelectRecentPhoto(asset: PHAsset, attachment: SignalAttachment)
+    func didSelectRecentPhoto(asset: PHAsset, attachment: PreviewableAttachment)
 
     func showUnblockConversationUI(completion: ((Bool) -> Void)?)
 }
@@ -207,6 +207,8 @@ public class ConversationInputToolbar: UIView, QuotedReplyPreviewDelegate {
     public enum Style {
         @available(iOS 26, *)
         static var glassTintColor: UIColor {
+            // This set of colors is copied to elsewhere.
+            // Please update all places if you change color values.
             UIColor { traitCollection in
                 if traitCollection.userInterfaceStyle == .dark {
                     return UIColor(white: 0, alpha: 0.2)
@@ -742,6 +744,7 @@ public class ConversationInputToolbar: UIView, QuotedReplyPreviewDelegate {
         let hMargin: CGFloat = iOS26Layout ? 12 : 0 // iOS 26 needs space between leading/trailing buttons and text view background.
         messageContentView.directionalLayoutMargins = .init(hMargin: hMargin, vMargin: vMargin)
         messageContentView.semanticContentAttribute = .forceLeftToRight
+        backgroundView.semanticContentAttribute = .forceLeftToRight
 
         backgroundView.translatesAutoresizingMaskIntoConstraints = false
         messageComponentsView.translatesAutoresizingMaskIntoConstraints = false
@@ -2157,7 +2160,6 @@ public class ConversationInputToolbar: UIView, QuotedReplyPreviewDelegate {
     private lazy var stickerListViewWrapper: UIVisualEffectView = {
         let view = UIVisualEffectView()
 
-#if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             view.clipsToBounds = true
             view.cornerConfiguration = .uniformCorners(radius: .fixed(StickerLayout.backgroundCornerRadius))
@@ -2167,7 +2169,6 @@ public class ConversationInputToolbar: UIView, QuotedReplyPreviewDelegate {
             let minRadius = StickerLayout.backgroundCornerRadius - max(StickerLayout.backgroundMargins.leading, StickerLayout.backgroundMargins.top)
             stickersListView.cornerConfiguration = .uniformCorners(radius: .containerConcentric(minimum: minRadius))
         }
-#endif
 
         // List view.
         view.directionalLayoutMargins = StickerLayout.backgroundMargins
@@ -2190,7 +2191,7 @@ public class ConversationInputToolbar: UIView, QuotedReplyPreviewDelegate {
     private lazy var stickersListView: StickerHorizontalListView = {
         let view = StickerHorizontalListView(
             cellSize: StickerLayout.listItemSize,
-            cellInset: 0,
+            cellContentInset: 0,
             spacing: StickerLayout.listItemSpacing
         )
         view.backgroundColor = .clear
@@ -3158,7 +3159,7 @@ extension ConversationInputToolbar {
             hasInstalledStickerPacks = !StickerManager.installedStickerPacks(transaction: transaction).isEmpty
         }
         guard hasInstalledStickerPacks else {
-            presentManageStickersView()
+            inputToolbarDelegate?.presentManageStickersView()
             return
         }
         toggleKeyboardType(.sticker, animated: true)
@@ -3236,19 +3237,14 @@ extension ConversationInputToolbar: ConversationTextViewToolbarDelegate {
     func textViewDidChangeSelection(_ textView: UITextView) { }
 }
 
-extension ConversationInputToolbar: StickerPickerDelegate {
-    public func didSelectSticker(stickerInfo: StickerInfo) {
+extension ConversationInputToolbar: StickerKeyboardDelegate {
+
+    public func stickerKeyboard(_: StickerKeyboard, didSelect stickerInfo: StickerInfo) {
         AssertIsOnMainThread()
         inputToolbarDelegate?.sendSticker(stickerInfo)
     }
 
-    public var storyStickerConfiguration: SignalUI.StoryStickerConfiguration {
-        .hide
-    }
-}
-
-extension ConversationInputToolbar: StickerPacksToolbarDelegate {
-    public func presentManageStickersView() {
+    public func stickerKeyboardDidRequestPresentManageStickersView(_ stickerKeyboard: StickerKeyboard) {
         AssertIsOnMainThread()
         inputToolbarDelegate?.presentManageStickersView()
     }
@@ -3256,7 +3252,7 @@ extension ConversationInputToolbar: StickerPacksToolbarDelegate {
 
 extension ConversationInputToolbar: AttachmentKeyboardDelegate {
 
-    func didSelectRecentPhoto(asset: PHAsset, attachment: SignalAttachment) {
+    func didSelectRecentPhoto(asset: PHAsset, attachment: PreviewableAttachment) {
         inputToolbarDelegate?.didSelectRecentPhoto(asset: asset, attachment: attachment)
     }
 

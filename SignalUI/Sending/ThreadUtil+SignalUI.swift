@@ -11,7 +11,7 @@ extension ThreadUtil {
 
     public class func enqueueMessage(
         body messageBody: MessageBody?,
-        mediaAttachments: [SignalAttachment] = [],
+        attachments: ([SendableAttachment], isViewOnce: Bool) = ([], isViewOnce: false),
         thread: TSThread,
         quotedReplyDraft: DraftQuotedReplyModel? = nil,
         linkPreviewDraft: OWSLinkPreviewDraft? = nil,
@@ -30,8 +30,9 @@ extension ThreadUtil {
                 let linkPreviewDataSource = try await linkPreviewDraft.mapAsync {
                     try await DependenciesBridge.shared.linkPreviewManager.buildDataSource(from: $0)
                 }
-                let mediaAttachments = try await mediaAttachments.mapAsync {
-                    try await $0.forSending()
+                let attachmentContentValidator = DependenciesBridge.shared.attachmentContentValidator
+                let attachmentsForSending = try await attachments.0.mapAsync {
+                    try await $0.forSending(attachmentContentValidator: attachmentContentValidator)
                 }
                 let quotedReplyDraft = try await quotedReplyDraft.mapAsync {
                     try await DependenciesBridge.shared.quotedReplyManager.prepareDraftForSending($0)
@@ -42,7 +43,8 @@ extension ThreadUtil {
                         thread: thread,
                         timestamp: messageTimestamp,
                         messageBody: messageBody,
-                        mediaAttachments: mediaAttachments,
+                        mediaAttachments: attachmentsForSending,
+                        isViewOnce: attachments.isViewOnce,
                         quotedReplyDraft: quotedReplyDraft,
                         linkPreviewDataSource: linkPreviewDataSource,
                         transaction: readTransaction
@@ -182,31 +184,21 @@ extension UnpreparedOutgoingMessage {
         thread: TSThread,
         timestamp: UInt64? = nil,
         messageBody: ValidatedMessageBody?,
-        mediaAttachments: [SignalAttachment.ForSending] = [],
+        mediaAttachments: [SendableAttachment.ForSending] = [],
+        isViewOnce: Bool = false,
         quotedReplyDraft: DraftQuotedReplyModel.ForSending?,
         linkPreviewDataSource: LinkPreviewDataSource?,
         transaction: DBReadTransaction
     ) -> UnpreparedOutgoingMessage {
+        assert(!isViewOnce || mediaAttachments.count == 1)
+        assert(!mediaAttachments.contains(where: { $0.renderingFlag == .borderless }) || mediaAttachments.count == 1)
+
         let dmConfigurationStore = DependenciesBridge.shared.disappearingMessagesConfigurationStore
         let dmConfig = dmConfigurationStore.fetchOrBuildDefault(for: .thread(thread), tx: transaction)
 
         let isVoiceMessage = mediaAttachments.count == 1
             && messageBody?.oversizeText == nil
             && mediaAttachments.last?.renderingFlag == .voiceMessage
-
-        var isViewOnceMessage = false
-        for attachment in mediaAttachments {
-            if attachment.isViewOnce {
-                assert(mediaAttachments.count == 1)
-                isViewOnceMessage = true
-                break
-            }
-
-            if attachment.renderingFlag == .borderless {
-                assert(mediaAttachments.count == 1)
-                break
-            }
-        }
 
         let messageBuilder: TSOutgoingMessageBuilder = .withDefaultValues(thread: thread, timestamp: timestamp)
 
@@ -215,7 +207,7 @@ extension UnpreparedOutgoingMessage {
         messageBuilder.expiresInSeconds = dmConfig.durationSeconds
         messageBuilder.expireTimerVersion = NSNumber.init(value: dmConfig.timerVersion)
         messageBuilder.isVoiceMessage = isVoiceMessage
-        messageBuilder.isViewOnceMessage = isViewOnceMessage
+        messageBuilder.isViewOnceMessage = isViewOnce
 
         let message = messageBuilder.build(transaction: transaction)
 

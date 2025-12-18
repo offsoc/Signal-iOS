@@ -6,20 +6,13 @@
 import Foundation
 public import SignalServiceKit
 
-class AddMoreRailItem: Equatable {
-
-    static func == (lhs: AddMoreRailItem, rhs: AddMoreRailItem) -> Bool {
-        return true
-    }
-}
-
-public struct AttachmentApprovalItem: Hashable {
+public class AttachmentApprovalItem {
 
     enum AttachmentApprovalItemError: Error {
         case noThumbnail
     }
 
-    public let attachment: SignalAttachment
+    public let attachment: PreviewableAttachment
 
     enum `Type` {
         case generic
@@ -43,7 +36,7 @@ public struct AttachmentApprovalItem: Hashable {
     let videoEditorModel: VideoEditorModel?
     let canSave: Bool
 
-    public init(attachment: SignalAttachment, canSave: Bool) {
+    public init(attachment: PreviewableAttachment, canSave: Bool) {
         self.attachment = attachment
         self.canSave = canSave
 
@@ -56,56 +49,33 @@ public struct AttachmentApprovalItem: Hashable {
         }
     }
 
-    private static func imageEditorModel(for attachment: SignalAttachment) -> ImageEditorModel? {
-        guard attachment.dataSource.isValidImage, !attachment.isAnimatedImage else {
+    private static func imageEditorModel(for attachment: PreviewableAttachment) -> ImageEditorModel? {
+        guard attachment.rawValue.isImage, !attachment.rawValue.isAnimatedImage else {
             return nil
         }
-        guard let dataUrl: URL = attachment.dataSource.dataUrl, dataUrl.isFileURL else {
-            owsFailDebug("Missing dataUrl.")
-            return nil
-        }
-
-        let path = dataUrl.path
         do {
-            return try ImageEditorModel(srcImagePath: path)
+            return try ImageEditorModel(srcImagePath: attachment.rawValue.dataSource.fileUrl.path)
         } catch {
             owsFailDebug("Could not create image editor: \(error)")
             return nil
         }
     }
 
-    private static func videoEditorModel(for attachment: SignalAttachment) -> VideoEditorModel? {
-        guard attachment.dataSource.isValidVideo, !attachment.isLoopingVideo else {
-            return nil
-        }
-        guard let dataUrl: URL = attachment.dataSource.dataUrl, dataUrl.isFileURL else {
-            owsFailDebug("Missing dataUrl.")
-            return nil
-        }
-
-        let path = dataUrl.path
+    private static func videoEditorModel(for attachment: PreviewableAttachment) -> VideoEditorModel? {
         do {
-            return try VideoEditorModel(srcVideoPath: path)
+            return try VideoEditorModel(attachment)
         } catch {
-            owsFailDebug("Could not create image editor: \(error)")
+            owsFailDebug("couldn't create video editor: \(error)")
             return nil
         }
     }
 
     func getThumbnailImage() -> UIImage? {
-        return self.attachment.staticThumbnail()
+        return self.attachment.rawValue.staticThumbnail()
     }
 
-    // MARK: Hashable
-
-    public func hash(into hasher: inout Hasher) {
-        return hasher.combine(attachment)
-    }
-
-    // MARK: Equatable
-
-    public static func == (lhs: AttachmentApprovalItem, rhs: AttachmentApprovalItem) -> Bool {
-        return lhs.attachment == rhs.attachment
+    public func isIdenticalTo(_ other: AttachmentApprovalItem?) -> Bool {
+        return self === other
     }
 }
 
@@ -121,7 +91,7 @@ class AttachmentApprovalItemCollection {
     }
 
     func itemAfter(item: AttachmentApprovalItem) -> AttachmentApprovalItem? {
-        guard let currentIndex = attachmentApprovalItems.firstIndex(of: item) else {
+        guard let currentIndex = attachmentApprovalItems.firstIndex(where: { $0.isIdenticalTo(item) }) else {
             owsFailDebug("currentIndex was unexpectedly nil")
             return nil
         }
@@ -132,7 +102,7 @@ class AttachmentApprovalItemCollection {
     }
 
     func itemBefore(item: AttachmentApprovalItem) -> AttachmentApprovalItem? {
-        guard let currentIndex = attachmentApprovalItems.firstIndex(of: item) else {
+        guard let currentIndex = attachmentApprovalItems.firstIndex(where: { $0.isIdenticalTo(item) }) else {
             owsFailDebug("currentIndex was unexpectedly nil")
             return nil
         }
@@ -143,7 +113,7 @@ class AttachmentApprovalItemCollection {
     }
 
     func remove(item: AttachmentApprovalItem) {
-        attachmentApprovalItems = attachmentApprovalItems.filter { $0 != item }
+        attachmentApprovalItems.removeAll(where: { $0.isIdenticalTo(item) })
     }
 
     var count: Int {

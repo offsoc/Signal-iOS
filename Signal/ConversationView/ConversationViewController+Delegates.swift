@@ -13,14 +13,14 @@ extension ConversationViewController: AttachmentApprovalViewControllerDelegate {
 
     public func attachmentApproval(
         _ attachmentApproval: AttachmentApprovalViewController,
-        didApproveAttachments attachments: [SignalAttachment],
-        messageBody: MessageBody?
+        didApproveAttachments approvedAttachments: ApprovedAttachments,
+        messageBody: MessageBody?,
     ) {
         Task { @MainActor in
             await self.sendAttachments(
-                attachments,
+                approvedAttachments,
+                messageBody: messageBody,
                 from: attachmentApproval,
-                messageBody: messageBody
             )
         }
     }
@@ -39,13 +39,12 @@ extension ConversationViewController: AttachmentApprovalViewControllerDelegate {
             return
         }
         guard let inputToolbar = inputToolbar else {
-            owsFailDebug("Missing inputToolbar.")
             return
         }
         inputToolbar.setMessageBody(newMessageBody, animated: false)
     }
 
-    public func attachmentApproval(_ attachmentApproval: AttachmentApprovalViewController, didRemoveAttachment attachment: SignalAttachment) { }
+    public func attachmentApproval(_ attachmentApproval: AttachmentApprovalViewController, didRemoveAttachment attachmentApprovalItem: AttachmentApprovalItem) { }
 
     public func attachmentApprovalDidTapAddMore(_ attachmentApproval: AttachmentApprovalViewController) { }
 
@@ -192,13 +191,13 @@ extension ConversationViewController: ContactShareViewControllerDelegate {
 // MARK: -
 
 extension ConversationViewController: ConversationHeaderViewDelegate {
-    public func didTapConversationHeaderView(_ conversationHeaderView: ConversationHeaderView) {
+    func didTapConversationHeaderView(_ conversationHeaderView: ConversationHeaderView) {
         AssertIsOnMainThread()
 
         showConversationSettings()
     }
 
-    public func didTapConversationHeaderViewAvatar(_ conversationHeaderView: ConversationHeaderView) {
+    func didTapConversationHeaderViewAvatar(_ conversationHeaderView: ConversationHeaderView) {
         AssertIsOnMainThread()
 
         if conversationHeaderView.avatarView.configuration.hasStoriesToDisplay {
@@ -220,16 +219,16 @@ extension ConversationViewController: ConversationInputTextViewDelegate {
         // If trying to paste a sticker, forego anything async since
         // the pasteboard will be cleared as soon as paste() exits.
         if SignalAttachment.pasteboardHasStickerAttachment() {
-            do throws(SignalAttachmentError) {
+            do {
                 self.didPasteAttachments([try SignalAttachment.stickerAttachmentFromPasteboard()].compacted())
             } catch {
-                self.showErrorAlert(attachmentError: error)
+                self.showErrorAlert(attachmentError: error as? SignalAttachmentError)
             }
             return
         }
 
         ModalActivityIndicatorViewController.present(fromViewController: self, asyncBlock: { modal in
-            do throws(SignalAttachmentError) {
+            do {
                 let attachments = try await SignalAttachment.attachmentsFromPasteboard()
                 modal.dismiss {
                     // Note: attachment array might be nil at this point; that's fine.
@@ -237,13 +236,13 @@ extension ConversationViewController: ConversationInputTextViewDelegate {
                 }
             } catch {
                 modal.dismiss {
-                    self.showErrorAlert(attachmentError: error)
+                    self.showErrorAlert(attachmentError: error as? SignalAttachmentError)
                 }
             }
         })
     }
 
-    func didPasteAttachments(_ attachments: [SignalAttachment]?) {
+    func didPasteAttachments(_ attachments: [PreviewableAttachment]?) {
         AssertIsOnMainThread()
 
         guard let attachments, attachments.count > 0 else {
@@ -253,9 +252,13 @@ extension ConversationViewController: ConversationInputTextViewDelegate {
 
         // If the thing we pasted is sticker-like, send it immediately
         // and render it borderless.
-        if attachments.count == 1, let a = attachments.first, a.isBorderless {
+        if attachments.count == 1, let a = attachments.first, a.rawValue.isBorderless {
             Task {
-                await self.sendAttachments([a], from: self, messageBody: nil)
+                await self.sendAttachments(
+                    ApprovedAttachments(nonViewOnceAttachments: [a], imageQuality: .standard),
+                    messageBody: nil,
+                    from: self,
+                )
             }
         } else {
             dismissKeyBoard()

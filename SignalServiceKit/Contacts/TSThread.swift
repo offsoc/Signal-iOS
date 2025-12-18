@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+public import LibSignalClient
+
 extension TSThread {
     public typealias RowId = Int64
 
@@ -215,7 +217,8 @@ extension TSThread {
                     .unblockedOtherUser,
                     .unblockedGroup,
                     .acceptedMessageRequest,
-                    .typeEndPoll:
+                    .typeEndPoll,
+                    .typePinnedMessage:
                 break
             }
         }
@@ -316,5 +319,15 @@ extension TSThread {
 
             databaseStorage.touch(thread: selfThread, shouldReindex: false, tx: tx)
         }
+    }
+
+    public func canUserEditPinnedMessages(aci: Aci) -> Bool {
+        guard let groupThread = self as? TSGroupThread,
+              let groupModel = groupThread.groupModel as? TSGroupModelV2 else {
+            // Not a group thread, so no access to check.
+            return true
+        }
+
+        return groupModel.access.attributes != .administrator || groupThread.groupModel.groupMembership.isFullMemberAndAdministrator(aci)
     }
 }

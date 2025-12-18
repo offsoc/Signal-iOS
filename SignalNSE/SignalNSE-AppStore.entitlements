@@ -4,8 +4,6 @@
 <dict>
 	<key>com.apple.developer.default-data-protection</key>
 	<string>NSFileProtectionComplete</string>
-	<key>com.apple.developer.usernotifications.filtering</key>
-	<true/>
 	<key>com.apple.developer.networking.carrier-constrained.app-optimized</key>
 	<true/>
 	<key>com.apple.developer.networking.carrier-constrained.appcategory</key>
@@ -13,6 +11,8 @@
 		<string>messaging-8001</string>
 	</array>
 	<key>com.apple.developer.pushkit.unrestricted-voip</key>
+	<true/>
+	<key>com.apple.developer.usernotifications.filtering</key>
 	<true/>
 	<key>com.apple.security.application-groups</key>
 	<array>

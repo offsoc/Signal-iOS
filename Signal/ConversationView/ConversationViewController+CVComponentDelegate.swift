@@ -646,17 +646,17 @@ extension ConversationViewController: CVComponentDelegate {
     }
 
     public func didTapUsernameLink(usernameLink: Usernames.UsernameLink) {
-        SSKEnvironment.shared.databaseStorageRef.read { tx in
-            UsernameQuerier().queryForUsernameLink(
+        Task {
+            guard let (_, aci) = await UsernameQuerier().queryForUsernameLink(
                 link: usernameLink,
                 fromViewController: self,
-                tx: tx,
-                onSuccess: { _, aci in
-                    SignalApp.shared.presentConversationForAddress(
-                        SignalServiceAddress(aci),
-                        animated: true
-                    )
-                }
+            ) else {
+                return
+            }
+
+            SignalApp.shared.presentConversationForAddress(
+                SignalServiceAddress(aci),
+                animated: true,
             )
         }
     }
@@ -1370,6 +1370,14 @@ extension ConversationViewController: CVComponentDelegate {
         } catch {
             Logger.error("Unable to update local poll state with votes: \(error)")
         }
+    }
+
+    public func didTapViewPinnedMessage(pinnedMessageUniqueId: String) {
+        ensureInteractionLoadedThenScrollToInteraction(
+            pinnedMessageUniqueId,
+            alignment: .centerIfNotEntirelyOnScreen,
+            isAnimated: true
+        )
     }
 }
 

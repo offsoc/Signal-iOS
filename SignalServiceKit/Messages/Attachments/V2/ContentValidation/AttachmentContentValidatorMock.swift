@@ -12,8 +12,7 @@ open class AttachmentContentValidatorMock: AttachmentContentValidator {
     init() {}
 
     open func validateContents(
-        dataSource: DataSource,
-        shouldConsume: Bool,
+        dataSource: DataSourcePath,
         mimeType: String,
         renderingFlag: AttachmentReference.RenderingFlag,
         sourceFilename: String?

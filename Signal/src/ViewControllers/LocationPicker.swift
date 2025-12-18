@@ -475,16 +475,16 @@ public class Location: NSObject {
         self.placemark = placemark
     }
 
-    public func prepareAttachment() async throws -> SignalAttachment {
+    public func prepareAttachment() async throws -> SendableAttachment {
         let image = try await generateSnapshot()
         guard let jpegData = image.jpegData(compressionQuality: 1.0) else {
             throw LocationError.assertion
         }
-        let dataSource = DataSourceValue(jpegData, utiType: UTType.jpeg.identifier)
-        guard let dataSource else {
-            throw SignalAttachmentError.missingData
-        }
-        return try SignalAttachment.imageAttachment(dataSource: dataSource, dataUTI: UTType.jpeg.identifier)
+        let dataSource = try DataSourcePath(writingTempFileData: jpegData, fileExtension: "jpg")
+        return try await SendableAttachment.forPreviewableAttachment(
+            PreviewableAttachment(rawValue: SignalAttachment.imageAttachment(dataSource: dataSource, dataUTI: UTType.jpeg.identifier)),
+            imageQualityLevel: .one,
+        )
     }
 
     public var messageText: String {

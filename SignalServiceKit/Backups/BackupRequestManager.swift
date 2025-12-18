@@ -142,7 +142,7 @@ public protocol BackupRequestManager {
         auth: BackupServiceAuth
     ) async throws
 
-    func fetchSvr🐝AuthCredential(
+    func fetchSVRBAuthCredential(
         key: MessageRootBackupKey,
         chatServiceAuth auth: ChatServiceAuth,
         forceRefresh: Bool,
@@ -150,7 +150,7 @@ public protocol BackupRequestManager {
 }
 
 extension BackupRequestManager {
-    func fetchBackupServiceAuth(
+    public func fetchBackupServiceAuth(
         for key: BackupKeyMaterial,
         localAci: Aci,
         auth: ChatServiceAuth,
@@ -445,12 +445,12 @@ public struct BackupRequestManagerImpl: BackupRequestManager {
         )
     }
 
-    public func fetchSvr🐝AuthCredential(
+    public func fetchSVRBAuthCredential(
         key: MessageRootBackupKey,
         chatServiceAuth auth: ChatServiceAuth,
         forceRefresh: Bool,
     ) async throws -> LibSignalClient.Auth {
-        return try await backupAuthCredentialManager.fetchSvr🐝AuthCredential(
+        return try await backupAuthCredentialManager.fetchSVRBAuthCredential(
             key: key,
             chatServiceAuth: auth,
             forceRefresh: forceRefresh,
@@ -628,7 +628,7 @@ public class BackupRequestManagerMock: BackupRequestManager {
         fatalError("Unimplemented")
     }
 
-    public func fetchSvr🐝AuthCredential(
+    public func fetchSVRBAuthCredential(
         key: SignalServiceKit.MessageRootBackupKey,
         chatServiceAuth auth: SignalServiceKit.ChatServiceAuth,
         forceRefresh: Bool

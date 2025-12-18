@@ -399,7 +399,8 @@ public class CVPollView: ManualStackView {
         state: CVPollView.State,
         previousPollState: CVPollView.State?,
         cellMeasurement: CVCellMeasurement,
-        componentDelegate: CVComponentDelegate
+        componentDelegate: CVComponentDelegate,
+        accessibilitySummary: String
     ) {
         let poll = state.poll
 
@@ -409,6 +410,10 @@ public class CVPollView: ManualStackView {
         let questionTextLabelConfig = configurator.questionTextLabelConfig
         questionTextLabelConfig.applyForRendering(label: questionTextLabel)
         outerStackSubViews.append(questionTextLabel)
+
+        // Accessibility
+        questionTextLabel.isAccessibilityElement = true
+        questionTextLabel.accessibilityLabel = accessibilitySummary
 
         buildSubtitleStack(configurator: configurator, cellMeasurement: cellMeasurement)
         outerStackSubViews.append(subtitleStack)
@@ -520,6 +525,36 @@ public class CVPollView: ManualStackView {
             generator.prepare()
 
             super.init(name: "PollOptionView")
+
+            // Accessibility
+            let localizedVotesString = String.localizedStringWithFormat(
+                OWSLocalizedString(
+                    "POLL_VOTE_COUNT",
+                    tableName: "PluralAware",
+                    comment: "Count indicating number of votes for this option. Embeds {{number of votes}}"
+                ),
+                pollOption.acis.count
+            )
+
+            isAccessibilityElement = true
+            switch localUserVoteState {
+            case .vote:
+                accessibilityTraits.insert(.selected)
+                accessibilityLabel = "\(pollOption.text). \(localizedVotesString)"
+            case .unvote:
+                accessibilityTraits.remove(.selected)
+                accessibilityLabel = "\(pollOption.text). \(localizedVotesString)"
+            case .pendingVote, .pendingUnvote:
+                accessibilityTraits.remove(.selected)
+                accessibilityLabel = OWSLocalizedString("POLL_ACCESSIBILITY_LABEL_OPTION_PENDING", comment: "Accessibility label for a vote option that is not selected by the user.") + ".\(pollOption.text). \(localizedVotesString)"
+            }
+
+            if !pollIsEnded {
+                accessibilityTraits.insert(.button)
+            } else {
+                accessibilityTraits.insert(.staticText)
+            }
+
             buildOptionRowStack(
                 configurator: configurator,
                 cellMeasurement: cellMeasurement,
@@ -626,10 +661,21 @@ public class CVPollView: ManualStackView {
 
                 var subviewFrame = CGRect(
                     origin: CGPoint(x: originX, y: superview.bounds.origin.y),
-                    size: CGSize(width: numVotesBarFill, height: superview.bounds.height)
+                    size: CGSize(width: progressFill.frame.width, height: superview.bounds.height)
                 )
 
-                guard prevVotes != nil else {
+                // CVPollView is discarded and re-rendered everytime the vote state changes,
+                // so we only ever want to animate once (when appearing) for each view.
+                // But, layoutSubviews() is called multiple times when creating the view
+                // which can cause glitchiness in the animations, or the wrong bar fill.
+                if prevVotes != nil {
+                    // If this view already animated/animating, that means this is a
+                    // repeat call to layoutSubviews() and we don't want to change the
+                    // width - the animation will set it correctly once it completes.
+                    if !didAnimate {
+                        subviewFrame.width = prevNumVotesBarFill
+                    }
+                } else {
                     // Don't animate if there's no previous state, just set to the final width.
                     subviewFrame.width = numVotesBarFill
                     Self.setSubviewFrame(subview: progressFill, frame: subviewFrame)
@@ -641,6 +687,7 @@ public class CVPollView: ManualStackView {
                     didAnimate = true
 
                     DispatchQueue.main.async { [weak self] in
+                        // Start animation at previous state's fill, and finish at new state's fill.
                         self?.progressFill.frame.width = prevNumVotesBarFill
                         if prevNumVotesBarFill != numVotesBarFill {
                             UIView.animate(

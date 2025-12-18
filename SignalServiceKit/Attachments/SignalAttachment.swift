@@ -63,22 +63,11 @@ extension SignalAttachmentError: LocalizedError, UserErrorDescriptionProvider {
 //
 // TODO: Perhaps do conversion off the main thread?
 
-public class SignalAttachment: NSObject {
+public class SignalAttachment: CustomDebugStringConvertible {
 
     // MARK: Properties
 
-    public let dataSource: DataSource
-
-    public var captionText: String?
-
-    // This flag should be set for text attachments that can be sent as text messages.
-    public var isConvertibleToTextMessage = false
-
-    // This flag should be set for attachments that can be sent as contact shares.
-    public var isConvertibleToContactShare = false
-
-    // This flag should be set for attachments that should be sent as view-once messages.
-    public var isViewOnceAttachment = false
+    public let dataSource: DataSourcePath
 
     // Attachment types are identified using UTIs.
     //
@@ -100,10 +89,9 @@ public class SignalAttachment: NSObject {
 
     // This method should not be called directly; use the factory
     // methods instead.
-    private init(dataSource: DataSource, dataUTI: String) {
+    private init(dataSource: DataSourcePath, dataUTI: String) {
         self.dataSource = dataSource
         self.dataUTI = dataUTI
-        super.init()
 
         NotificationCenter.default.addObserver(
             self,
@@ -122,60 +110,8 @@ public class SignalAttachment: NSObject {
 
     // MARK: Methods
 
-    public override var debugDescription: String {
-        let fileSize = ByteCountFormatter.string(fromByteCount: Int64(dataSource.dataLength), countStyle: .file)
-        return "[SignalAttachment] mimeType: \(mimeType), fileSize: \(fileSize)"
-    }
-
-    #if compiler(>=6.2)
-    @concurrent
-    #endif
-    public func preparedForOutput(qualityLevel: ImageQualityLevel) async throws(SignalAttachmentError) -> SignalAttachment {
-        // We only bother converting/compressing non-animated images
-        guard isImage, !isAnimatedImage else { return self }
-
-        guard !Self.isValidOutputOriginalImage(
-            dataSource: dataSource,
-            dataUTI: dataUTI,
-            imageQuality: qualityLevel
-        ) else { return self }
-
-        return try Self.convertAndCompressImage(
-            dataSource: dataSource,
-            attachment: self,
-            imageQuality: qualityLevel
-        )
-    }
-
-    private func replacingDataSource(with newDataSource: DataSource, dataUTI: String? = nil) -> SignalAttachment {
-        let result = SignalAttachment(dataSource: newDataSource, dataUTI: dataUTI ?? self.dataUTI)
-        result.captionText = captionText
-        result.isConvertibleToTextMessage = isConvertibleToTextMessage
-        result.isConvertibleToContactShare = isConvertibleToContactShare
-        result.isViewOnceAttachment = isViewOnceAttachment
-        result.isVoiceMessage = isVoiceMessage
-        result.isBorderless = isBorderless
-        result.isLoopingVideo = isLoopingVideo
-        return result
-    }
-
-    public func buildOutgoingAttachmentInfo(message: TSMessage? = nil) -> OutgoingAttachmentInfo {
-        return OutgoingAttachmentInfo(
-            dataSource: dataSource,
-            contentType: mimeType,
-            sourceFilename: filenameOrDefault,
-            caption: captionText,
-            albumMessageId: message?.uniqueId,
-            isBorderless: isBorderless,
-            isVoiceMessage: isVoiceMessage,
-            isLoopingVideo: isLoopingVideo
-        )
-    }
-
-    public func buildAttachmentDataSource(
-        message: TSMessage? = nil
-    ) async throws -> AttachmentDataSource {
-        return try await buildOutgoingAttachmentInfo(message: message).asAttachmentDataSource()
+    public var debugDescription: String {
+        return "[SignalAttachment mimeType: \(mimeType)]"
     }
 
     public func staticThumbnail() -> UIImage? {
@@ -185,9 +121,7 @@ public class SignalAttachment: NSObject {
 
         return autoreleasepool {
             guard let image: UIImage = {
-                if isAnimatedImage {
-                    return image()
-                } else if isImage {
+                if isImage {
                     return image()
                 } else if isVideo {
                     return videoPreview()
@@ -228,7 +162,7 @@ public class SignalAttachment: NSObject {
         if let cachedImage = cachedImage {
             return cachedImage
         }
-        guard let image = UIImage(data: dataSource.data) else {
+        guard let imageData = try? dataSource.readData(), let image = UIImage(data: imageData) else {
             return nil
         }
         cachedImage = image
@@ -240,9 +174,7 @@ public class SignalAttachment: NSObject {
             return cachedVideoPreview
         }
 
-        guard let mediaUrl = dataSource.dataUrl else {
-            return nil
-        }
+        let mediaUrl = dataSource.fileUrl
 
         do {
             let filePath = mediaUrl.path
@@ -293,31 +225,7 @@ public class SignalAttachment: NSObject {
                 }
             }
         }
-        if isOversizeText {
-            return MimeType.textXSignalPlain.rawValue
-        }
         return UTType(dataUTI)?.preferredMIMEType ?? MimeType.applicationOctetStream.rawValue
-    }
-
-    // Use the filename if known. If not, e.g. if the attachment was copy/pasted, we'll generate a filename
-    // like: "signal-2017-04-24-095918.zip"
-    public var filenameOrDefault: String {
-        if let filename = dataSource.sourceFilename?.filterFilename() {
-            return filename.filterFilename()
-        } else {
-            let kDefaultAttachmentName = "signal"
-
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateFormat = "yyyy-MM-dd-HHmmss"
-            let dateString = dateFormatter.string(from: Date())
-
-            let withoutExtension = "\(kDefaultAttachmentName)-\(dateString)"
-            if let fileExtension = self.fileExtension {
-                return "\(withoutExtension).\(fileExtension)"
-            }
-
-            return withoutExtension
-        }
     }
 
     // Returns the file extension for this attachment or nil if no file extension
@@ -328,9 +236,6 @@ public class SignalAttachment: NSObject {
             if !fileExtension.isEmpty {
                 return fileExtension.filterFilename()
             }
-        }
-        if isOversizeText {
-            return MimeTypeUtil.oversizeTextAttachmentFileExtension
         }
         guard let fileExtension = MimeTypeUtil.fileExtensionForUtiType(dataUTI) else {
             return nil
@@ -390,32 +295,22 @@ public class SignalAttachment: NSObject {
         return SignalAttachment.outputImageUTISet.contains(dataUTI)
     }
 
-    public var isAnimatedImage: Bool {
-        let mimeType = mimeType
-        if MimeTypeUtil.isSupportedDefinitelyAnimatedMimeType(mimeType) {
-            return true
-        }
-        if MimeTypeUtil.isSupportedMaybeAnimatedMimeType(mimeType) {
-            return dataSource.imageMetadata?.isAnimated ?? false
-        }
-        return false
-    }
+    /// Only valid when `isImage` is true.
+    ///
+    /// If `isAnimatedImage` is true, then `isImage` must be true. In other
+    /// words, all animated images are images (but not all images are animated).
+    public var isAnimatedImage = false
 
     public var isVideo: Bool {
         return SignalAttachment.videoUTISet.contains(dataUTI)
     }
 
+    public var isVisualMedia: Bool {
+        return self.isImage || self.isVideo
+    }
+
     public var isAudio: Bool {
         return SignalAttachment.audioUTISet.contains(dataUTI)
-    }
-
-    public var isOversizeText: Bool {
-        return dataUTI == MimeTypeUtil.oversizeTextAttachmentUti
-    }
-
-    public var isText: Bool {
-        let isText = UTType(dataUTI)?.conforms(to: .text) ?? false
-        return isText || isOversizeText
     }
 
     public var isUrl: Bool {
@@ -511,7 +406,7 @@ public class SignalAttachment: NSObject {
 
     /// Returns an attachment from the pasteboard, or nil if no attachment
     /// can be found.
-    public class func attachmentsFromPasteboard() async throws(SignalAttachmentError) -> [SignalAttachment]? {
+    public class func attachmentsFromPasteboard() async throws -> [PreviewableAttachment]? {
         guard
             UIPasteboard.general.numberOfItems >= 1,
             let pasteboardUTITypes = UIPasteboard.general.types(forItemSet: nil)
@@ -519,7 +414,7 @@ public class SignalAttachment: NSObject {
             return nil
         }
 
-        var attachments = [SignalAttachment]()
+        var attachments = [PreviewableAttachment]()
         for (index, utiSet) in pasteboardUTITypes.enumerated() {
             let attachment = try await attachmentFromPasteboard(
                 pasteboardUTIs: utiSet,
@@ -533,7 +428,7 @@ public class SignalAttachment: NSObject {
             }
 
             if attachments.isEmpty {
-                if attachment.allowMultipleAttachments() == false {
+                if attachment.rawValue.allowMultipleAttachments() == false {
                     // If this is a non-visual-media attachment, we only allow 1 pasted item at a time.
                     return [attachment]
                 }
@@ -541,7 +436,7 @@ public class SignalAttachment: NSObject {
 
             // Otherwise, continue with any visual media attachments, dropping
             // any non-visual-media ones based on the first pasteboard item.
-            if attachment.allowMultipleAttachments() {
+            if attachment.rawValue.allowMultipleAttachments() {
                 attachments.append(attachment)
             } else {
                 Logger.warn("Dropping non-visual media attachment in paste action")
@@ -557,8 +452,7 @@ public class SignalAttachment: NSObject {
                 || MimeTypeUtil.isSupportedImageMimeType(self.mimeType))
     }
 
-    private class func attachmentFromPasteboard(pasteboardUTIs: [String], index: IndexSet, retrySinglePixelImages: Bool) async throws(SignalAttachmentError) -> SignalAttachment? {
-
+    private class func attachmentFromPasteboard(pasteboardUTIs: [String], index: IndexSet, retrySinglePixelImages: Bool) async throws -> PreviewableAttachment? {
         var pasteboardUTISet = Set<String>(filterDynamicUTITypes(pasteboardUTIs))
         guard pasteboardUTISet.count > 0 else {
             return nil
@@ -575,28 +469,24 @@ public class SignalAttachment: NSObject {
 
         for dataUTI in inputImageUTISet {
             if pasteboardUTISet.contains(dataUTI) {
-                guard let data = dataForPasteboardItem(dataUTI: dataUTI, index: index) else {
-                    owsFailDebug("Missing expected pasteboard data for UTI: \(dataUTI)")
+                guard
+                    let dataValue = dataForPasteboardItem(dataUTI: dataUTI, index: index),
+                    let fileExtension = MimeTypeUtil.fileExtensionForUtiType(dataUTI),
+                    let dataSource = try? DataSourcePath(writingTempFileData: dataValue, fileExtension: fileExtension)
+                else {
+                    owsFailDebug("Failed to build data source from pasteboard data for UTI: \(dataUTI)")
                     return nil
                 }
-                let dataSource = DataSourceValue(data, utiType: dataUTI)
-                guard let dataSource else {
-                    throw .missingData
-                }
-
                 // There is a known bug with the iOS pasteboard where it will randomly give a
                 // single green pixel, and nothing else. Work around this by refetching the
                 // pasteboard after a brief delay (once, then give up).
-                if dataSource.imageMetadata?.pixelSize == CGSize(square: 1), retrySinglePixelImages {
+                if retrySinglePixelImages, (try? dataSource.imageSource())?.imageMetadata(ignorePerTypeFileSizeLimits: true)?.pixelSize == CGSize(square: 1) {
                     try? await Task.sleep(nanoseconds: NSEC_PER_MSEC * 50)
                     return try await attachmentFromPasteboard(pasteboardUTIs: pasteboardUTIs, index: index, retrySinglePixelImages: false)
                 }
 
-                // If the data source is sticker like AND we're pasting the attachment,
-                // we want to make it borderless.
-                let isBorderless = dataSource.hasStickerLikeProperties
-
-                return try imageAttachment(dataSource: dataSource, dataUTI: dataUTI, isBorderless: isBorderless)
+                let attachment = try imageAttachment(dataSource: dataSource, dataUTI: dataUTI, canBeBorderless: true)
+                return PreviewableAttachment(rawValue: attachment)
             }
         }
         for dataUTI in videoUTISet {
@@ -610,36 +500,40 @@ public class SignalAttachment: NSObject {
                     return nil
                 }
 
-                return try? await SignalAttachment.compressVideoAsMp4(dataSource: dataSource)
+                // [15M] TODO: Don't ignore errors for pasteboard videos.
+                let attachment = try? await SignalAttachment.compressVideoAsMp4(dataSource: dataSource)
+                return attachment.map(PreviewableAttachment.init(rawValue:))
             }
         }
         for dataUTI in audioUTISet {
             if pasteboardUTISet.contains(dataUTI) {
-                guard let data = dataForPasteboardItem(dataUTI: dataUTI, index: index) else {
-                    owsFailDebug("Missing expected pasteboard data for UTI: \(dataUTI)")
+                guard
+                    let dataValue = dataForPasteboardItem(dataUTI: dataUTI, index: index),
+                    let fileExtension = MimeTypeUtil.fileExtensionForUtiType(dataUTI),
+                    let dataSource = try? DataSourcePath(writingTempFileData: dataValue, fileExtension: fileExtension)
+                else {
+                    owsFailDebug("Failed to build data source from pasteboard data for UTI: \(dataUTI)")
                     return nil
                 }
-                let dataSource = DataSourceValue(data, utiType: dataUTI)
-                guard let dataSource else {
-                    throw .missingData
-                }
-                return try audioAttachment(dataSource: dataSource, dataUTI: dataUTI)
+                let attachment = try audioAttachment(dataSource: dataSource, dataUTI: dataUTI)
+                return PreviewableAttachment(rawValue: attachment)
             }
         }
 
         let dataUTI = pasteboardUTISet[pasteboardUTISet.startIndex]
-        guard let data = dataForPasteboardItem(dataUTI: dataUTI, index: index) else {
-            owsFailDebug("Missing expected pasteboard data for UTI: \(dataUTI)")
+        guard
+            let dataValue = dataForPasteboardItem(dataUTI: dataUTI, index: index),
+            let fileExtension = MimeTypeUtil.fileExtensionForUtiType(dataUTI),
+            let dataSource = try? DataSourcePath(writingTempFileData: dataValue, fileExtension: fileExtension)
+        else {
+            owsFailDebug("Failed to build data source from pasteboard data for UTI: \(dataUTI)")
             return nil
         }
-        let dataSource = DataSourceValue(data, utiType: dataUTI)
-        guard let dataSource else {
-            throw .missingData
-        }
-        return try genericAttachment(dataSource: dataSource, dataUTI: dataUTI)
+        let attachment = try genericAttachment(dataSource: dataSource, dataUTI: dataUTI)
+        return PreviewableAttachment(rawValue: attachment)
     }
 
-    public class func stickerAttachmentFromPasteboard() throws(SignalAttachmentError) -> SignalAttachment? {
+    public class func stickerAttachmentFromPasteboard() throws -> PreviewableAttachment? {
         guard
             UIPasteboard.general.numberOfItems >= 1,
             let pasteboardUTITypes = UIPasteboard.general.types(forItemSet: IndexSet(integer: 0))
@@ -660,39 +554,38 @@ public class SignalAttachment: NSObject {
 
         for dataUTI in inputImageUTISet {
             if pasteboardUTISet.contains(dataUTI) {
-                guard let data = dataForPasteboardItem(dataUTI: dataUTI, index: IndexSet(integer: 0)) else {
+                guard
+                    let dataValue = dataForPasteboardItem(dataUTI: dataUTI, index: IndexSet(integer: 0)),
+                    let fileExtension = MimeTypeUtil.fileExtensionForUtiType(dataUTI),
+                    let dataSource = try? DataSourcePath(writingTempFileData: dataValue, fileExtension: fileExtension)
+                else {
                     owsFailDebug("Missing expected pasteboard data for UTI: \(dataUTI)")
                     return nil
                 }
-
-                let dataSource = DataSourceValue(data, utiType: dataUTI)
-                guard let dataSource else {
-                    throw .missingData
+                let result = try imageAttachment(dataSource: dataSource, dataUTI: dataUTI, canBeBorderless: true)
+                if !result.isBorderless {
+                    owsFailDebug("treating non-sticker data as a sticker")
+                    result.isBorderless = true
                 }
-                if !dataSource.hasStickerLikeProperties {
-                    owsFailDebug("Treating non-sticker data as a sticker")
-                }
-                return try imageAttachment(dataSource: dataSource, dataUTI: dataUTI, isBorderless: true)
+                return PreviewableAttachment(rawValue: result)
             }
         }
         return nil
     }
 
     /// Returns an attachment from the memoji.
-    public class func attachmentFromMemoji(_ memojiGlyph: OWSAdaptiveImageGlyph) throws(SignalAttachmentError) -> SignalAttachment {
+    public class func attachmentFromMemoji(_ memojiGlyph: OWSAdaptiveImageGlyph) throws -> PreviewableAttachment {
         let dataUTI = filterDynamicUTITypes([memojiGlyph.contentType.identifier]).first
         guard let dataUTI else {
-            throw .invalidFileFormat
+            throw SignalAttachmentError.invalidFileFormat
         }
-        let dataSource = DataSourceValue(memojiGlyph.imageContent, utiType: dataUTI)
-        guard let dataSource else {
-            throw .missingData
+        let fileExtension = MimeTypeUtil.fileExtensionForUtiType(dataUTI)
+        guard let fileExtension else {
+            throw SignalAttachmentError.missingData
         }
-        return try imageAttachment(
-            dataSource: dataSource,
-            dataUTI: dataUTI,
-            isBorderless: dataSource.hasStickerLikeProperties,
-        )
+        let dataSource = try DataSourcePath(writingTempFileData: memojiGlyph.imageContent, fileExtension: fileExtension)
+        let attachment = try imageAttachment(dataSource: dataSource, dataUTI: dataUTI, canBeBorderless: true)
+        return PreviewableAttachment(rawValue: attachment)
     }
 
     private class func dataForPasteboardItem(dataUTI: String, index: IndexSet) -> Data? {
@@ -710,39 +603,43 @@ public class SignalAttachment: NSObject {
     // MARK: Image Attachments
 
     // Factory method for an image attachment.
-    public class func imageAttachment(dataSource: any DataSource, dataUTI: String, isBorderless: Bool = false) throws(SignalAttachmentError) -> SignalAttachment {
+    public class func imageAttachment(dataSource: DataSourcePath, dataUTI: String, canBeBorderless: Bool = false) throws -> SignalAttachment {
         assert(!dataUTI.isEmpty)
 
-        let attachment = SignalAttachment(dataSource: dataSource, dataUTI: dataUTI)
-
-        attachment.isBorderless = isBorderless
-
         guard inputImageUTISet.contains(dataUTI) else {
-            throw .invalidFileFormat
+            throw SignalAttachmentError.invalidFileFormat
         }
 
-        guard dataSource.dataLength > 0 else {
+        // [15M] TODO: Allow sending empty attachments?
+        guard let fileSize = try? dataSource.readLength(), fileSize > 0 else {
             owsFailDebug("imageData was empty")
-            throw .invalidData
+            throw SignalAttachmentError.invalidData
         }
 
-        let imageMetadata = dataSource.imageMetadata
-        let isAnimated = imageMetadata?.isAnimated ?? false
+        guard let imageMetadata = try? dataSource.imageSource().imageMetadata(ignorePerTypeFileSizeLimits: true) else {
+            throw SignalAttachmentError.invalidData
+        }
+
+        let newDataSource: DataSourcePath
+        let newDataUTI: String
+
+        let isAnimated = imageMetadata.isAnimated
+        // Never re-encode animated images (i.e. GIFs) as JPEGs.
         if isAnimated {
-            guard dataSource.dataLength <= OWSMediaUtils.kMaxFileSizeAnimatedImage else {
-                throw .fileSizeTooLarge
+            guard fileSize <= OWSMediaUtils.kMaxFileSizeAnimatedImage else {
+                throw SignalAttachmentError.fileSizeTooLarge
             }
 
-            // Never re-encode animated images (i.e. GIFs) as JPEGs.
             if dataUTI == UTType.png.identifier {
-                do {
-                    return try attachment.removingImageMetadata()
-                } catch {
-                    Logger.warn("Failed to remove metadata from animated PNG. Error: \(error)")
-                    throw .couldNotRemoveMetadata
+                let strippedData = try Self.removeImageMetadata(fromPngData: dataSource.readData())
+                guard let fileExtension = MimeTypeUtil.fileExtensionForUtiType(dataUTI) else {
+                    throw SignalAttachmentError.couldNotRemoveMetadata
                 }
+                newDataSource = try DataSourcePath(writingTempFileData: strippedData, fileExtension: fileExtension)
+                newDataUTI = dataUTI
             } else {
-                return attachment
+                newDataSource = dataSource
+                newDataUTI = dataUTI
             }
         } else {
             if
@@ -768,26 +665,44 @@ public class SignalAttachment: NSObject {
             // context. The user can choose during sending whether they want the final send to be in
             // standard or high quality. We will do the final convert and compress before uploading.
 
-            if isValidOutputOriginalImage(dataSource: dataSource, dataUTI: dataUTI, imageQuality: .maximumForCurrentAppContext) {
-                do {
-                    return try attachment.removingImageMetadata()
-                } catch {}
-            }
-
-            return try convertAndCompressImage(
-                dataSource: dataSource,
-                attachment: attachment,
-                imageQuality: .maximumForCurrentAppContext
+            let isOriginalValid = self.isOriginalImageValid(
+                forImageQuality: .maximumForCurrentAppContext(),
+                fileSize: fileSize,
+                dataUTI: dataUTI,
+                imageMetadata: imageMetadata,
             )
+
+            // If the original is valid and we can remove the metadata, go that route.
+            if isOriginalValid, let strippedData = try? Self.removeImageMetadata(fromData: dataSource.readData(), dataUti: dataUTI) {
+                guard let fileExtension = MimeTypeUtil.fileExtensionForUtiType(dataUTI) else {
+                    throw SignalAttachmentError.couldNotRemoveMetadata
+                }
+                newDataSource = try DataSourcePath(writingTempFileData: strippedData, fileExtension: fileExtension)
+                newDataUTI = dataUTI
+            } else {
+                // Otherwise, resize & convert to a PNG or JPG before previewing it.
+                let containerType: ContainerType
+                (newDataSource, containerType) = try convertAndCompressImage(
+                    toImageQuality: .maximumForCurrentAppContext(),
+                    dataSource: dataSource,
+                    imageMetadata: imageMetadata,
+                )
+                newDataUTI = containerType.dataType.identifier
+            }
         }
+        let result = SignalAttachment(dataSource: newDataSource, dataUTI: newDataUTI)
+        result.isBorderless = canBeBorderless && imageMetadata.hasStickerLikeProperties
+        result.isAnimatedImage = isAnimated
+        return result
     }
 
     // If the proposed attachment already conforms to the
     // file size and content size limits, don't recompress it.
-    private class func isValidOutputOriginalImage(
-        dataSource: DataSource,
+    static func isOriginalImageValid(
+        forImageQuality imageQuality: ImageQualityLevel,
+        fileSize: UInt64,
         dataUTI: String,
-        imageQuality: ImageQualityLevel
+        imageMetadata: ImageMetadata,
     ) -> Bool {
         // 10-18-2023: Due to an issue with corrupt JPEG IPTC metadata causing a
         // crash in CGImageDestinationCopyImageSource, stop using the original
@@ -797,24 +712,47 @@ public class SignalAttachment: NSObject {
         guard dataUTI != UTType.jpeg.identifier else { return false }
 
         guard SignalAttachment.outputImageUTISet.contains(dataUTI) else { return false }
-        guard dataSource.dataLength <= imageQuality.maxFileSize else { return false }
-        if dataSource.hasStickerLikeProperties { return true }
-        guard dataSource.dataLength <= imageQuality.maxOriginalFileSize else { return false }
+        guard fileSize <= imageQuality.maxFileSize else { return false }
+        if imageMetadata.hasStickerLikeProperties { return true }
+        guard fileSize <= imageQuality.maxOriginalFileSize else { return false }
         return true
     }
 
-    private class func convertAndCompressImage(
-        dataSource: DataSource,
-        attachment: SignalAttachment,
-        imageQuality: ImageQualityLevel,
-    ) throws(SignalAttachmentError) -> SignalAttachment {
+    public enum ContainerType {
+        case jpg
+        case png
+
+        public var dataType: UTType {
+            switch self {
+            case .jpg: UTType.jpeg
+            case .png: UTType.png
+            }
+        }
+
+        var mimeType: String {
+            self.dataType.preferredMIMEType!
+        }
+
+        public var fileExtension: String {
+            switch self {
+            case .jpg: "jpg"
+            case .png: "png"
+            }
+        }
+    }
+
+    static func convertAndCompressImage(
+        toImageQuality imageQuality: ImageQualityLevel,
+        dataSource: DataSourcePath,
+        imageMetadata: ImageMetadata,
+    ) throws(SignalAttachmentError) -> (dataSource: DataSourcePath, containerType: ContainerType) {
         var nextImageUploadQuality: ImageQualityTier? = imageQuality.startingTier
         while let imageUploadQuality = nextImageUploadQuality {
             let result = try convertAndCompressImageAttempt(
-                dataSource: dataSource,
-                attachment: attachment,
-                imageQuality: imageQuality,
+                toImageQuality: imageQuality,
                 imageUploadQuality: imageUploadQuality,
+                dataSource: dataSource,
+                imageMetadata: imageMetadata,
             )
             if let result {
                 return result
@@ -826,29 +764,39 @@ public class SignalAttachment: NSObject {
         throw .fileSizeTooLarge
     }
 
-    private class func convertAndCompressImageAttempt(
-        dataSource: DataSource,
-        attachment: SignalAttachment,
-        imageQuality: ImageQualityLevel,
+    private static func convertAndCompressImageAttempt(
+        toImageQuality imageQuality: ImageQualityLevel,
         imageUploadQuality: ImageQualityTier,
-    ) throws(SignalAttachmentError) -> SignalAttachment? {
-        return try autoreleasepool { () throws(SignalAttachmentError) -> SignalAttachment? in
+        dataSource: DataSourcePath,
+        imageMetadata: ImageMetadata,
+    ) throws(SignalAttachmentError) -> (dataSource: DataSourcePath, containerType: ContainerType)? {
+        return try autoreleasepool { () throws(SignalAttachmentError) -> (dataSource: DataSourcePath, containerType: ContainerType)? in
             let maxSize = imageUploadQuality.maxEdgeSize
-            let pixelSize = dataSource.imageMetadata?.pixelSize ?? .zero
+            let pixelSize = imageMetadata.pixelSize
             var imageProperties = [CFString: Any]()
+
+            guard let imageSource = cgImageSource(for: dataSource, imageFormat: imageMetadata.imageFormat) else {
+                throw .couldNotParseImage
+            }
 
             let cgImage: CGImage
             if pixelSize.width > maxSize || pixelSize.height > maxSize {
-                guard let downsampledCGImage = downsampleImage(dataSource: dataSource, toMaxSize: maxSize) else {
+                // NOTE: For unknown reasons, resizing images with UIGraphicsBeginImageContext()
+                // crashes reliably in the share extension after screen lock's auth UI has been presented.
+                // Resizing using a CGContext seems to work fine.
+
+                // Perform downsampling
+                let downsampleOptions = [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceShouldCacheImmediately: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: maxSize
+                ] as [CFString: Any] as CFDictionary
+                guard let downsampledImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, downsampleOptions) else {
                     throw .couldNotResizeImage
                 }
-
-                cgImage = downsampledCGImage
+                cgImage = downsampledImage
             } else {
-                guard let imageSource = cgImageSource(for: dataSource) else {
-                    throw .couldNotParseImage
-                }
-
                 guard let originalImageProperties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, [
                     kCGImageSourceShouldCache: false
                 ] as CFDictionary) as? [CFString: Any] else {
@@ -875,25 +823,22 @@ public class SignalAttachment: NSObject {
             // Write to disk and convert to file based data source,
             // so we can keep the image out of memory.
 
-            let dataFileExtension: String
-            let dataType: UTType
+            let containerType: ContainerType
 
             // We convert everything that's not sticker-like to jpg, because
             // often images with alpha channels don't actually have any
             // transparent pixels (all screenshots fall into this bucket)
-            // and there is not a simple, performant way, to check if there
+            // and there is not a simple, performant way to check if there
             // are any transparent pixels in an image.
-            if dataSource.hasStickerLikeProperties {
-                dataFileExtension = "png"
-                dataType = .png
+            if imageMetadata.hasStickerLikeProperties {
+                containerType = .png
             } else {
-                dataFileExtension = "jpg"
-                dataType = .jpeg
+                containerType = .jpg
                 imageProperties[kCGImageDestinationLossyCompressionQuality] = compressionQuality(for: pixelSize)
             }
 
-            let tempFileUrl = OWSFileSystem.temporaryFileUrl(fileExtension: dataFileExtension)
-            guard let destination = CGImageDestinationCreateWithURL(tempFileUrl as CFURL, dataType.identifier as CFString, 1, nil) else {
+            let tempFileUrl = OWSFileSystem.temporaryFileUrl(fileExtension: containerType.fileExtension)
+            guard let destination = CGImageDestinationCreateWithURL(tempFileUrl as CFURL, containerType.dataType.identifier as CFString, 1, nil) else {
                 owsFailDebug("Failed to create CGImageDestination for attachment")
                 throw .couldNotConvertImage
             }
@@ -903,9 +848,10 @@ public class SignalAttachment: NSObject {
                 throw .couldNotConvertImage
             }
 
-            let outputDataSource: DataSource
+            let outputDataSource = DataSourcePath(fileUrl: tempFileUrl, ownership: .owned)
+            let outputFileSize: UInt64
             do {
-                outputDataSource = try DataSourcePath(fileUrl: tempFileUrl, shouldDeleteOnDeallocation: false)
+                outputFileSize = try outputDataSource.readLength()
             } catch {
                 owsFailDebug("Failed to create data source for downsampled image \(error)")
                 throw .couldNotConvertImage
@@ -915,15 +861,14 @@ public class SignalAttachment: NSObject {
             let outputFilename: String?
             if let sourceFilename = dataSource.sourceFilename {
                 let sourceFilenameWithoutExtension = (sourceFilename as NSString).deletingPathExtension
-                outputFilename = (sourceFilenameWithoutExtension as NSString).appendingPathExtension(dataFileExtension) ?? sourceFilenameWithoutExtension
+                outputFilename = (sourceFilenameWithoutExtension as NSString).appendingPathExtension(containerType.fileExtension) ?? sourceFilenameWithoutExtension
             } else {
                 outputFilename = nil
             }
             outputDataSource.sourceFilename = outputFilename
 
-            if outputDataSource.dataLength <= imageQuality.maxFileSize, outputDataSource.dataLength <= OWSMediaUtils.kMaxFileSizeImage {
-                let recompressedAttachment = attachment.replacingDataSource(with: outputDataSource, dataUTI: dataType.identifier)
-                return recompressedAttachment
+            if outputFileSize <= imageQuality.maxFileSize, outputFileSize <= OWSMediaUtils.kMaxFileSizeImage {
+                return (dataSource: outputDataSource, containerType: containerType)
             }
 
             return nil
@@ -937,12 +882,12 @@ public class SignalAttachment: NSObject {
         return 0.6
     }
 
-    private class func cgImageSource(for dataSource: DataSource) -> CGImageSource? {
-        if dataSource.imageMetadata?.imageFormat == ImageFormat.webp {
+    private class func cgImageSource(for dataSource: DataSourcePath, imageFormat: ImageFormat) -> CGImageSource? {
+        if imageFormat == .webp {
             // CGImageSource doesn't know how to handle webp, so we have
             // to pass it through YYImage. This is costly and we could
             // perhaps do better, but webp images are usually small.
-            guard let yyImage = UIImage.sd_image(with: dataSource.data) else {
+            guard let yyImage = UIImage.sd_image(with: try? dataSource.readData()) else {
                 owsFailDebug("Failed to initialized YYImage")
                 return nil
             }
@@ -951,39 +896,11 @@ public class SignalAttachment: NSObject {
                 return nil
             }
             return CGImageSourceCreateWithData(imageData as CFData, nil)
-        } else if let dataUrl = dataSource.dataUrl {
+        } else {
             // If we can init with a URL, we prefer to. This way, we can avoid loading
             // the full image into memory. We need to set kCGImageSourceShouldCache to
             // false to ensure that CGImageSource doesn't try and read the file immediately.
-            return CGImageSourceCreateWithURL(dataUrl as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
-        } else {
-            return CGImageSourceCreateWithData(dataSource.data as CFData, nil)
-        }
-    }
-
-    // NOTE: For unknown reasons, resizing images with UIGraphicsBeginImageContext()
-    // crashes reliably in the share extension after screen lock's auth UI has been presented.
-    // Resizing using a CGContext seems to work fine.
-    private class func downsampleImage(dataSource: DataSource, toMaxSize maxSize: CGFloat) -> CGImage? {
-        autoreleasepool {
-            guard let imageSource: CGImageSource = cgImageSource(for: dataSource) else {
-                owsFailDebug("Failed to create CGImageSource for attachment")
-                return nil
-            }
-
-            // Perform downsampling
-            let downsampleOptions = [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceShouldCacheImmediately: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: maxSize
-            ] as [CFString: Any] as CFDictionary
-            guard let downsampledImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, downsampleOptions) else {
-                owsFailDebug("Failed to downsample attachment")
-                return nil
-            }
-
-            return downsampledImage
+            return CGImageSourceCreateWithURL(dataSource.fileUrl as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
         }
     }
 
@@ -1008,10 +925,18 @@ public class SignalAttachment: NSObject {
         return Set(asBytes)
     }()
 
+    private static func removeImageMetadata(fromData dataValue: Data, dataUti: String) throws(SignalAttachmentError) -> Data {
+        if dataUti == UTType.png.identifier {
+            return try self.removeImageMetadata(fromPngData: dataValue)
+        } else {
+            return try self.removeImageMetadata(fromNonPngData: dataValue)
+        }
+    }
+
     /// Remove nonessential chunks from PNG data.
     /// - Returns: Cleaned PNG data.
     /// - Throws: `SignalAttachmentError.couldNotRemoveMetadata` if the PNG parser fails.
-    private static func removeMetadata(fromPng pngData: Data) throws(SignalAttachmentError) -> Data {
+    private static func removeImageMetadata(fromPngData pngData: Data) throws(SignalAttachmentError) -> Data {
         do {
             let chunker = try PngChunker(source: DataImageSource(pngData))
             var result = PngChunker.pngSignature
@@ -1027,18 +952,8 @@ public class SignalAttachment: NSObject {
         }
     }
 
-    private func removingImageMetadata() throws(SignalAttachmentError) -> SignalAttachment {
-        owsAssertDebug(isImage)
-
-        if dataUTI == UTType.png.identifier {
-            let cleanedData = try Self.removeMetadata(fromPng: dataSource.data)
-            guard let dataSource = DataSourceValue(cleanedData, utiType: dataUTI) else {
-                throw .couldNotRemoveMetadata
-            }
-            return replacingDataSource(with: dataSource)
-        }
-
-        guard let source = CGImageSourceCreateWithData(dataSource.data as CFData, nil) else {
+    private static func removeImageMetadata(fromNonPngData dataValue: Data) throws(SignalAttachmentError) -> Data {
+        guard let source = CGImageSourceCreateWithData(dataValue as CFData, nil) else {
             throw .missingData
         }
 
@@ -1089,34 +1004,21 @@ public class SignalAttachment: NSObject {
             throw .couldNotRemoveMetadata
         }
 
-        guard let dataSource = DataSourceValue(mutableData as Data, utiType: dataUTI) else {
-            throw .couldNotRemoveMetadata
-        }
-
-        return self.replacingDataSource(with: dataSource)
+        return mutableData as Data
     }
 
     // MARK: Video Attachments
 
     // Factory method for video attachments.
-    public class func videoAttachment(dataSource: DataSource, dataUTI: String) throws(SignalAttachmentError) -> SignalAttachment {
+    public class func videoAttachment(dataSource: DataSourcePath, dataUTI: String) throws -> SignalAttachment {
+        try OWSMediaUtils.validateVideoExtension(ofPath: dataSource.fileUrl.path)
+        try OWSMediaUtils.validateVideoAsset(atPath: dataSource.fileUrl.path)
         return try newAttachment(
             dataSource: dataSource,
             dataUTI: dataUTI,
             validUTISet: videoUTISet,
             maxFileSize: OWSMediaUtils.kMaxFileSizeVideo,
         )
-    }
-
-    public class func copyToVideoTempDir(url fromUrl: URL) throws -> URL {
-        let baseDir = SignalAttachment.videoTempPath.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        OWSFileSystem.ensureDirectoryExists(baseDir.path)
-        let toUrl = baseDir.appendingPathComponent(fromUrl.lastPathComponent)
-
-        Logger.debug("moving \(fromUrl) -> \(toUrl)")
-        try FileManager.default.copyItem(at: fromUrl, to: toUrl)
-
-        return toUrl
     }
 
     private class var videoTempPath: URL {
@@ -1183,14 +1085,7 @@ public class SignalAttachment: NSObject {
             mp4Filename = nil
         }
 
-        let dataSource: DataSourcePath
-        do {
-            dataSource = try DataSourcePath(fileUrl: exportURL, shouldDeleteOnDeallocation: true)
-        } catch {
-            // TODO: Remove this; it's dead code.
-            owsFailDebug("Failed to build data source for exported video URL")
-            throw SignalAttachmentError.couldNotConvertToMpeg4
-        }
+        let dataSource = DataSourcePath(fileUrl: exportURL, ownership: .owned)
         dataSource.sourceFilename = mp4Filename
 
         let endTime = MonotonicDate()
@@ -1203,7 +1098,7 @@ public class SignalAttachment: NSObject {
     // MARK: Audio Attachments
 
     // Factory method for audio attachments.
-    private class func audioAttachment(dataSource: DataSource, dataUTI: String) throws(SignalAttachmentError) -> SignalAttachment {
+    private class func audioAttachment(dataSource: DataSourcePath, dataUTI: String) throws(SignalAttachmentError) -> SignalAttachment {
         return try newAttachment(
             dataSource: dataSource,
             dataUTI: dataUTI,
@@ -1215,7 +1110,10 @@ public class SignalAttachment: NSObject {
     // MARK: Generic Attachments
 
     // Factory method for generic attachments.
-    public class func genericAttachment(dataSource: DataSource, dataUTI: String) throws(SignalAttachmentError) -> SignalAttachment {
+    public class func genericAttachment(dataSource: DataSourcePath, dataUTI: String) throws(SignalAttachmentError) -> SignalAttachment {
+        // [15M] TODO: Enforce this at compile-time rather than runtime.
+        owsPrecondition(!videoUTISet.contains(dataUTI))
+        owsPrecondition(!inputImageUTISet.contains(dataUTI))
         return try newAttachment(
             dataSource: dataSource,
             dataUTI: dataUTI,
@@ -1226,7 +1124,7 @@ public class SignalAttachment: NSObject {
 
     // MARK: Voice Messages
 
-    public class func voiceMessageAttachment(dataSource: DataSource, dataUTI: String) throws(SignalAttachmentError) -> SignalAttachment {
+    public class func voiceMessageAttachment(dataSource: DataSourcePath, dataUTI: String) throws(SignalAttachmentError) -> SignalAttachment {
         let attachment = try audioAttachment(dataSource: dataSource, dataUTI: dataUTI)
         attachment.isVoiceMessage = true
         return attachment
@@ -1235,7 +1133,7 @@ public class SignalAttachment: NSObject {
     // MARK: Attachments
 
     // Factory method for attachments of any kind.
-    public class func attachment(dataSource: DataSource, dataUTI: String) throws(SignalAttachmentError) -> SignalAttachment {
+    public class func attachment(dataSource: DataSourcePath, dataUTI: String) throws -> SignalAttachment {
         if inputImageUTISet.contains(dataUTI) {
             return try imageAttachment(dataSource: dataSource, dataUTI: dataUTI)
         } else if videoUTISet.contains(dataUTI) {
@@ -1250,7 +1148,7 @@ public class SignalAttachment: NSObject {
     // MARK: Helper Methods
 
     private class func newAttachment(
-        dataSource: DataSource,
+        dataSource: DataSourcePath,
         dataUTI: String,
         validUTISet: Set<String>?,
         maxFileSize: UInt,
@@ -1265,13 +1163,13 @@ public class SignalAttachment: NSObject {
             }
         }
 
-        guard dataSource.dataLength > 0 else {
+        // [15M] TODO: Allow sending empty attachments?
+        guard let fileSize = try? dataSource.readLength(), fileSize > 0 else {
             owsFailDebug("Empty attachment")
-            assert(dataSource.dataLength > 0)
             throw .invalidData
         }
 
-        guard dataSource.dataLength <= maxFileSize else {
+        guard fileSize <= maxFileSize else {
             throw .fileSizeTooLarge
         }
 

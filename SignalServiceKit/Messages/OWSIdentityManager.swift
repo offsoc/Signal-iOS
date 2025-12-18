@@ -593,13 +593,10 @@ public class OWSIdentityManagerImpl: OWSIdentityManager {
     }
 
     private func syncQueuedVerificationStates() {
-        guard tsAccountManager.registrationStateWithMaybeSneakyTransaction.isRegistered else {
+        guard let registeredState = try? tsAccountManager.registeredStateWithMaybeSneakyTransaction() else {
             return
         }
-        guard let thread = TSContactThread.getOrCreateLocalThreadWithSneakyTransaction() else {
-            owsFailDebug("Missing thread.")
-            return
-        }
+        let thread = TSContactThread.getOrCreateThread(contactAddress: registeredState.localIdentifiers.aciAddress)
         let allKeys = db.read { tx in queuedVerificationStateSyncMessagesKeyValueStore.allKeys(transaction: tx) }
         // We expect very few keys in practice, and each key triggers multiple
         // database write transactions. If we do end up with thousands of keys,
@@ -1022,7 +1019,7 @@ public class OWSIdentityManagerImpl: OWSIdentityManager {
             let response = try await self.networkManager.asyncRequest(request)
 
             guard response.responseStatusCode == 200 else {
-                throw OWSAssertionError("Unexpected response from batch identity request \(response.responseStatusCode)")
+                throw response.asError()
             }
 
             guard let responseDictionary = response.responseBodyDict else {

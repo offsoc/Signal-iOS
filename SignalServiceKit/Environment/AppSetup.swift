@@ -224,6 +224,11 @@ extension AppSetup.GlobalsContinuation {
             remoteConfig: remoteConfig.netConfig(),
         )
 
+        let cron = Cron(
+            appVersion: appVersion.currentAppVersion4,
+            db: databaseStorage,
+        )
+
         let recipientDatabaseTable = RecipientDatabaseTable()
         let signalAccountStore = SignalAccountStoreImpl()
         let threadStore = ThreadStoreImpl()
@@ -281,7 +286,6 @@ extension AppSetup.GlobalsContinuation {
         )
         let blockedRecipientStore = BlockedRecipientStore()
         let blockingManager = BlockingManager(
-            appReadiness: appReadiness,
             blockedGroupStore: BlockedGroupStore(),
             blockedRecipientStore: blockedRecipientStore
         )
@@ -324,7 +328,11 @@ extension AppSetup.GlobalsContinuation {
             appReadiness: appReadiness
         )
         let syncManager = testDependencies.syncManager ?? OWSSyncManager(appReadiness: appReadiness)
-        let udManager = OWSUDManagerImpl(appReadiness: appReadiness)
+        let udManager = OWSUDManagerImpl(
+            cron: cron,
+            db: databaseStorage,
+            tsAccountManager: tsAccountManager,
+        )
         let versionedProfiles = testDependencies.versionedProfiles ?? VersionedProfilesImpl(appReadiness: appReadiness)
 
         let lastVisibleInteractionStore = LastVisibleInteractionStore()
@@ -400,6 +408,7 @@ extension AppSetup.GlobalsContinuation {
             ),
             appReadiness: appReadiness,
             appVersion: appVersion,
+            cron: cron,
             dateProvider: dateProvider,
             db: db,
             networkManager: networkManager,
@@ -994,7 +1003,13 @@ extension AppSetup.GlobalsContinuation {
             threadStore: threadStore
         )
 
-        let pinnedMessageManager = PinnedMessageManager()
+        let pinnedMessageManager = PinnedMessageManager(
+            disappearingMessagesConfigurationStore: disappearingMessagesConfigurationStore,
+            interactionStore: interactionStore,
+            accountManager: tsAccountManager,
+            db: db,
+            threadStore: threadStore
+        )
 
         let storyRecipientStore = StoryRecipientStore()
         let storyRecipientManager = StoryRecipientManager(
@@ -1035,15 +1050,6 @@ extension AppSetup.GlobalsContinuation {
             searchableNameIndexer: searchableNameIndexer,
             storageServiceManager: storageServiceManager,
             storyRecipientStore: storyRecipientStore
-        )
-
-        let backupRefreshManager = BackupRefreshManager(
-            accountKeyStore: accountKeyStore,
-            backupRequestManager: backupRequestManager,
-            backupSettingsStore: backupSettingsStore,
-            db: db,
-            networkManager: networkManager,
-            dateProvider: dateProvider
         )
 
         let accountEntropyPoolManager = AccountEntropyPoolManagerImpl(
@@ -1099,6 +1105,7 @@ extension AppSetup.GlobalsContinuation {
             backupCDNCredentialStore: backupCDNCredentialStore,
             backupSubscriptionManager: backupSubscriptionManager,
             backupTestFlightEntitlementManager: backupTestFlightEntitlementManager,
+            cron: cron,
             db: db,
             dmConfigurationStore: disappearingMessagesConfigurationStore,
             identityManager: identityManager,
@@ -1386,6 +1393,7 @@ extension AppSetup.GlobalsContinuation {
                 backupAttachmentUploadEraStore: backupAttachmentUploadEraStore,
                 backupPlanManager: backupPlanManager,
                 backupSubscriptionManager: backupSubscriptionManager,
+                callServiceSettingsStore: CallServiceSettingsStore(),
                 chatStyleArchiver: backupChatStyleArchiver,
                 disappearingMessageConfigurationStore: disappearingMessagesConfigurationStore,
                 donationSubscriptionManager: BackupArchive.Wrappers.DonationSubscriptionManager(),
@@ -1403,6 +1411,7 @@ extension AppSetup.GlobalsContinuation {
                 sskPreferences: BackupArchive.Wrappers.SSKPreferences(),
                 storyManager: BackupArchive.Wrappers.StoryManager(),
                 systemStoryManager: BackupArchive.Wrappers.SystemStoryManager(systemStoryManager: systemStoryManager),
+                theme: ThemeDataStore(),
                 typingIndicators: BackupArchive.Wrappers.TypingIndicators(typingIndicators: typingIndicators),
                 udManager: BackupArchive.Wrappers.UDManager(udManager: udManager),
                 usernameEducationManager: usernameEducationManager
@@ -1643,7 +1652,6 @@ extension AppSetup.GlobalsContinuation {
             backupKeyService: backupKeyService,
             backupListMediaManager: backupListMediaManager,
             backupListMediaStore: backupListMediaStore,
-            backupRefreshManager: backupRefreshManager,
             backupRequestManager: backupRequestManager,
             backupPlanManager: backupPlanManager,
             backupSubscriptionManager: backupSubscriptionManager,
@@ -1658,6 +1666,7 @@ extension AppSetup.GlobalsContinuation {
             chatColorSettingStore: chatColorSettingStore,
             chatConnectionManager: chatConnectionManager,
             contactShareManager: contactShareManager,
+            cron: cron,
             currentCallProvider: currentCallProvider,
             databaseChangeObserver: databaseStorage.databaseChangeObserver,
             db: db,

@@ -123,11 +123,9 @@ class UrlOpener {
 
     @MainActor
     func openUrl(_ parsedUrl: ParsedUrl, in window: UIWindow) {
-        guard tsAccountManager.registrationStateWithMaybeSneakyTransaction.isRegistered else {
-            return owsFailDebug("Ignoring URL; not registered.")
-        }
         guard let rootViewController = window.rootViewController else {
-            return owsFailDebug("Ignoring URL; no root view controller.")
+            owsFailDebug("Ignoring URL; no root view controller.")
+            return
         }
         if shouldDismiss(for: parsedUrl.openableUrl) && rootViewController.presentedViewController != nil {
             rootViewController.dismiss(animated: false, completion: {
@@ -147,37 +145,52 @@ class UrlOpener {
 
     @MainActor
     private func openUrlAfterDismissing(_ openableUrl: OpenableUrl, rootViewController: UIViewController) {
+        do throws(NotRegisteredError) {
+            try _openUrlAfterDismissing(openableUrl, rootViewController: rootViewController)
+        } catch {
+            Logger.warn("Ignoring url because we're not registered")
+        }
+    }
+
+    @MainActor
+    private func _openUrlAfterDismissing(_ openableUrl: OpenableUrl, rootViewController: UIViewController) throws(NotRegisteredError) {
         switch openableUrl {
         case .phoneNumberLink(let url):
+            _ = try tsAccountManager.registeredStateWithMaybeSneakyTransaction()
             SignalDotMePhoneNumberLink.openChat(url: url, fromViewController: rootViewController)
 
         case .usernameLink(let link):
-            databaseStorage.read { tx in
-                UsernameQuerier().queryForUsernameLink(
+            _ = try tsAccountManager.registeredStateWithMaybeSneakyTransaction()
+            Task {
+                guard let (_, aci) = await UsernameQuerier().queryForUsernameLink(
                     link: link,
                     fromViewController: rootViewController,
-                    tx: tx
-                ) { _, aci in
-                    SignalApp.shared.presentConversationForAddress(
-                        SignalServiceAddress(aci),
-                        animated: true
-                    )
+                ) else {
+                    return
                 }
+
+                SignalApp.shared.presentConversationForAddress(
+                    SignalServiceAddress(aci),
+                    animated: true,
+                )
             }
 
         case .stickerPack(let stickerPackInfo):
+            _ = try tsAccountManager.registeredStateWithMaybeSneakyTransaction()
             let stickerPackViewController = StickerPackViewController(stickerPackInfo: stickerPackInfo)
             stickerPackViewController.present(from: rootViewController, animated: false)
 
         case .groupInvite(let url):
+            _ = try tsAccountManager.registeredStateWithMaybeSneakyTransaction()
             GroupInviteLinksUI.openGroupInviteLink(url, fromViewController: rootViewController)
 
         case .signalProxy(let url):
             rootViewController.present(ProxyLinkSheetViewController(url: url)!, animated: true)
 
         case .linkDevice:
-            guard tsAccountManager.registrationStateWithMaybeSneakyTransaction.isRegisteredPrimaryDevice else {
-                owsFailDebug("Ignoring URL; not primary device.")
+            let registeredState = try tsAccountManager.registeredStateWithMaybeSneakyTransaction()
+            guard registeredState.isPrimary else {
+                Logger.warn("Ignoring URL; not primary device.")
                 return
             }
 
@@ -201,23 +214,46 @@ class UrlOpener {
             linkDeviceWarningActionSheet.addAction(.cancel)
             rootViewController.presentActionSheet(linkDeviceWarningActionSheet)
 
-        case .quickRestore(let url):
-
-            guard tsAccountManager.registrationStateWithMaybeSneakyTransaction.isRegisteredPrimaryDevice else {
-                owsFailDebug("Ignoring URL; not primary device.")
+        case .quickRestore:
+            let registeredState = try tsAccountManager.registeredStateWithMaybeSneakyTransaction()
+            guard registeredState.isPrimary else {
+                Logger.warn("Ignoring URL; not primary device.")
                 return
             }
 
-            let provisioningURL = DeviceProvisioningURL(urlString: url.absoluteString)
-            if let provisioningURL {
-                AppEnvironment.shared.outgoingDeviceRestorePresenter.present(
-                    provisioningURL: provisioningURL,
-                    presentingViewController: CurrentAppContext().frontmostViewController()!,
-                    animated: true
+            let quickRestoreWarningActionSheet = ActionSheetController(
+                message: OWSLocalizedString(
+                    "QUICK_RESTORE_URL_OPENED_ACTION_SHEET_EXTERNAL_URL_MESSAGE",
+                    comment: "Message for an action sheet telling users how to use quick restore, when trying to open an external quick restore URL."
                 )
+            )
+
+            let showCameraViewAction = ActionSheetAction(
+                title: CommonStrings.continueButton
+            ) { _ in
+                SignalApp.shared.showCameraCaptureView { navController in
+                    let sheet = HeroSheetViewController(
+                        hero: .image(UIImage(named: "phone-qr")!),
+                        title: OWSLocalizedString(
+                            "QUICK_RESTORE_URL_OPENED_ACTION_SHEET_EXTERNAL_URL_ACTION_TITLE",
+                            comment: "Title for sheet with info about scanning a Quick Restore QR code"
+                        ),
+                        body: OWSLocalizedString(
+                            "QUICK_RESTORE_URL_OPENED_ACTION_SHEET_EXTERNAL_URL_ACTION_BODY",
+                            comment: "Body for sheet with info about scanning a Quick Restore QR code"
+                        ),
+                        primaryButton: .dismissing(title: CommonStrings.okButton)
+                    )
+                    navController.topViewController?.present(sheet, animated: true)
+                }
             }
 
+            quickRestoreWarningActionSheet.addAction(showCameraViewAction)
+            quickRestoreWarningActionSheet.addAction(.cancel)
+            rootViewController.presentActionSheet(quickRestoreWarningActionSheet)
+
         case .completeIDEALDonation(let donationType):
+            _ = try tsAccountManager.registeredStateWithMaybeSneakyTransaction()
             Task { [appReadiness, databaseStorage] in
                 let handled = await DonationViewsUtil.attemptToContinueActiveIDEALDonation(
                     type: donationType,
@@ -244,6 +280,7 @@ class UrlOpener {
             }
 
         case .callLink(let callLink):
+            _ = try tsAccountManager.registeredStateWithMaybeSneakyTransaction()
             GroupCallViewController.presentLobby(for: callLink)
         }
     }

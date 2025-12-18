@@ -13,9 +13,9 @@ public enum RegistrationBackupRestoreError {
     case backupNotFound
     case incorrectRecoveryKey
     case versionMismatch
-    case retryableSVR🐝Error
-    case unretryableSVR🐝Error
-    case networkError(retryable: Bool)
+    case retryableSVRBError
+    case unretryableSVRBError
+    case networkError
     case rateLimited
     case cancellation
 }
@@ -48,8 +48,8 @@ public class RegistrationCoordinatorBackupErrorPresenterImpl:
         switch error {
         case let httpError as OWSHTTPError where httpError.responseStatusCode == 429:
             return .rateLimited
-        case _ where error.isNetworkFailureOrTimeout:
-            return .networkError(retryable: error.isRetryable)
+        case _ where error.isNetworkFailureOrTimeout || error.is5xxServiceResponse:
+            return .networkError
         case _ where error is BackupKeyMaterialError:
             // Missing recovery key
             return .incorrectRecoveryKey
@@ -78,12 +78,12 @@ public class RegistrationCoordinatorBackupErrorPresenterImpl:
             return .cancellation
         case BackupImportError.unsupportedVersion:
             return .versionMismatch
-        case let error as SVR🐝Error:
+        case let error as SVRBError:
             switch error {
             case .retryableAutomatically, .retryableByUser:
-                return .retryableSVR🐝Error
+                return .retryableSVRBError
             case .unrecoverable:
-                return .unretryableSVR🐝Error
+                return .unretryableSVRBError
             case .incorrectRecoveryKey:
                 return .incorrectRecoveryKey
             case .cancellationError:
@@ -270,7 +270,7 @@ public class RegistrationCoordinatorBackupErrorPresenterImpl:
                     )
                 }
             })
-        case .retryableSVR🐝Error, .cancellation:
+        case .retryableSVRBError, .cancellation:
             title = OWSLocalizedString(
                 "REGISTRATION_BACKUP_RESTORE_ERROR_RETRYABLE_SERVER_ERROR_TITLE",
                 comment: "Title for a sheet telling users to try restoring a backup again after a server error."
@@ -286,7 +286,7 @@ public class RegistrationCoordinatorBackupErrorPresenterImpl:
             actions.append(ActionSheetAction(title: CommonStrings.cancelButton) { _ in
                 continuation.resume(returning: .skipRestore)
             })
-        case .unretryableSVR🐝Error:
+        case .unretryableSVRBError:
             title = OWSLocalizedString(
                 "REGISTRATION_BACKUP_RESTORE_ERROR_UNRETRYABLE_SERVER_ERROR_TITLE",
                 comment: "Title for a sheet telling users restoring a backup unrecoverably failed."
@@ -298,7 +298,10 @@ public class RegistrationCoordinatorBackupErrorPresenterImpl:
 
             actions.append(ActionSheetAction(title: CommonStrings.contactSupport) { @MainActor _ in
                     Task { @MainActor in
-                        self.presentContactSupportSheet(presenter: presenter) {
+                        self.presentContactSupportSheet(
+                            emailFilter: .backupImportFailed,
+                            presenter: presenter,
+                        ) {
                             continuation.resume(returning: .skipRestore)
                         }
                     }
@@ -306,7 +309,7 @@ public class RegistrationCoordinatorBackupErrorPresenterImpl:
             actions.append(ActionSheetAction(title: CommonStrings.okButton) { _ in
                 continuation.resume(returning: .skipRestore)
             })
-        case .networkError(let isRetryable):
+        case .networkError:
             title = OWSLocalizedString(
                 "REGISTRATION_BACKUP_RESTORE_ERROR_NETWORK_TITLE",
                 comment: "Title for a sheet warning users about a network error during backup restore."
@@ -316,26 +319,8 @@ public class RegistrationCoordinatorBackupErrorPresenterImpl:
                 comment: "Body for a sheet warning users about a network error during backup restore."
             )
 
-            if isRetryable {
-                actions.append(ActionSheetAction(title: tryAgainString) { _ in
-                    continuation.resume(returning: .tryAgain)
-                })
-            } else {
-                actions.append(ActionSheetAction(title: tryAgainString) { _ in
-                    continuation.resume(returning: .skipRestore)
-                })
-            }
-            actions.append(ActionSheetAction(title: CommonStrings.contactSupport) { @MainActor _ in
-                Task { @MainActor in
-                    self.presentContactSupportSheet(presenter: presenter) {
-                        self.presentError(
-                            error: error,
-                            isQuickRestore: isQuickRestore,
-                            from: presenter,
-                            continuation: continuation
-                        )
-                    }
-                }
+            actions.append(ActionSheetAction(title: tryAgainString) { _ in
+                continuation.resume(returning: .tryAgain)
             })
             actions.append(ActionSheetAction(title: skipRestoreString) { _ in
                 continuation.resume(returning: .skipRestore)
@@ -349,6 +334,7 @@ public class RegistrationCoordinatorBackupErrorPresenterImpl:
 
     @MainActor
     private func presentContactSupportSheet(
+        emailFilter: ContactSupportActionSheet.EmailFilter,
         presenter: UIViewController,
         completion: @escaping () -> Void
     ) {
@@ -368,7 +354,7 @@ public class RegistrationCoordinatorBackupErrorPresenterImpl:
             )
         ) { _ in
             ContactSupportActionSheet.present(
-                emailFilter: .backupImportFailed,
+                emailFilter: emailFilter,
                 logDumper: .fromGlobals(),
                 fromViewController: presenter,
                 completion: completion
@@ -381,7 +367,7 @@ public class RegistrationCoordinatorBackupErrorPresenterImpl:
             )
         ) { _ in
             ContactSupportActionSheet.present(
-                emailFilter: .backupImportFailed,
+                emailFilter: emailFilter,
                 logDumper: .fromGlobals(),
                 fromViewController: presenter,
                 completion: completion

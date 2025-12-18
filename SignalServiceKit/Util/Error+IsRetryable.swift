@@ -5,6 +5,7 @@
 
 import Foundation
 import ObjectiveC
+public import SwiftProtobuf
 
 extension Error {
     public var hasIsRetryable: Bool {
@@ -76,12 +77,23 @@ extension CancellationError: IsRetryableProvider {
     public var isRetryableProvider: Bool { false }
 }
 
+extension SwiftProtobuf.BinaryDecodingError: IsRetryableProvider {
+    public var isRetryableProvider: Bool { false }
+}
+
+extension SwiftProtobuf.BinaryEncodingError: IsRetryableProvider {
+    public var isRetryableProvider: Bool { false }
+}
+
 // MARK: -
 
 // NOTE: We typically prefer to use a more specific error.
 public class OWSRetryableError: CustomNSError, IsRetryableProvider {
     public static var asNSError: NSError {
         OWSRetryableError() as Error as NSError
+    }
+
+    public init() {
     }
 
     // MARK: - IsRetryableProvider

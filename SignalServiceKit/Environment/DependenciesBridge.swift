@@ -79,9 +79,8 @@ public class DependenciesBridge {
     public let backupKeyService: BackupKeyService
     public let backupListMediaManager: BackupListMediaManager
     public let backupListMediaStore: BackupListMediaStore
-    public let backupRefreshManager: BackupRefreshManager
-    public let backupRequestManager: BackupRequestManager
     public let backupPlanManager: BackupPlanManager
+    public let backupRequestManager: BackupRequestManager
     public let backupSubscriptionManager: BackupSubscriptionManager
     public let backupTestFlightEntitlementManager: BackupTestFlightEntitlementManager
     public let badgeCountFetcher: BadgeCountFetcher
@@ -94,6 +93,7 @@ public class DependenciesBridge {
     public let chatColorSettingStore: ChatColorSettingStore
     public let chatConnectionManager: ChatConnectionManager
     public let contactShareManager: ContactShareManager
+    public let cron: Cron
     public let currentCallProvider: any CurrentCallProvider
     public let databaseChangeObserver: DatabaseChangeObserver
     public let db: any DB
@@ -217,7 +217,6 @@ public class DependenciesBridge {
         backupKeyService: BackupKeyService,
         backupListMediaManager: BackupListMediaManager,
         backupListMediaStore: BackupListMediaStore,
-        backupRefreshManager: BackupRefreshManager,
         backupRequestManager: BackupRequestManager,
         backupPlanManager: BackupPlanManager,
         backupSubscriptionManager: BackupSubscriptionManager,
@@ -232,6 +231,7 @@ public class DependenciesBridge {
         chatColorSettingStore: ChatColorSettingStore,
         chatConnectionManager: ChatConnectionManager,
         contactShareManager: ContactShareManager,
+        cron: Cron,
         currentCallProvider: any CurrentCallProvider,
         databaseChangeObserver: DatabaseChangeObserver,
         db: any DB,
@@ -354,7 +354,6 @@ public class DependenciesBridge {
         self.backupKeyService = backupKeyService
         self.backupListMediaManager = backupListMediaManager
         self.backupListMediaStore = backupListMediaStore
-        self.backupRefreshManager = backupRefreshManager
         self.backupRequestManager = backupRequestManager
         self.backupPlanManager = backupPlanManager
         self.backupSubscriptionManager = backupSubscriptionManager
@@ -369,6 +368,7 @@ public class DependenciesBridge {
         self.chatColorSettingStore = chatColorSettingStore
         self.chatConnectionManager = chatConnectionManager
         self.contactShareManager = contactShareManager
+        self.cron = cron
         self.currentCallProvider = currentCallProvider
         self.databaseChangeObserver = databaseChangeObserver
         self.db = db

@@ -23,7 +23,7 @@ class DataSettingsTableViewController: OWSTableViewController2 {
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(preferencesDidChange),
-            name: CallService.callServicePreferencesDidChange,
+            name: .callServicePreferencesDidChange,
             object: nil
         )
     }
@@ -106,7 +106,7 @@ class DataSettingsTableViewController: OWSTableViewController2 {
                 "SETTINGS_DATA_SENT_MEDIA_QUALITY_ITEM_TITLE",
                 comment: "Item title for the sent media quality setting"
             ),
-            accessoryText: SSKEnvironment.shared.databaseStorageRef.read(block: ImageQualityLevel.resolvedQuality(tx:)).localizedString,
+            accessoryText: SSKEnvironment.shared.databaseStorageRef.read(block: ImageQuality.fetchValue(tx:)).localizedString,
             actionBlock: { [weak self] in
                 self?.showSentMediaQualityPreferences()
             }
@@ -124,7 +124,7 @@ class DataSettingsTableViewController: OWSTableViewController2 {
         )
 
         let currentCallDataPreference = SSKEnvironment.shared.databaseStorageRef.read { transaction in
-            CallService.highDataNetworkInterfaces(readTx: transaction).inverted
+            CallServiceSettingsStore().highDataNetworkInterfaces(tx: transaction).inverted
         }
         let currentCallDataPreferenceString = NetworkInterfacePreferenceViewController.name(
             forInterfaceSet: currentCallDataPreference
@@ -146,8 +146,9 @@ class DataSettingsTableViewController: OWSTableViewController2 {
     // MARK: - Events
 
     private func showCallDataPreferences() {
+        let callServiceSettingsStore = CallServiceSettingsStore()
         let currentLowDataPreference = SSKEnvironment.shared.databaseStorageRef.read { readTx in
-            CallService.highDataNetworkInterfaces(readTx: readTx).inverted
+            callServiceSettingsStore.highDataNetworkInterfaces(tx: readTx).inverted
         }
 
         let vc = NetworkInterfacePreferenceViewController(
@@ -157,7 +158,7 @@ class DataSettingsTableViewController: OWSTableViewController2 {
                 if self != nil {
                     SSKEnvironment.shared.databaseStorageRef.write { writeTx in
                         let newHighDataPref = newLowDataPref.inverted
-                        CallService.setHighDataInterfaces(newHighDataPref, writeTx: writeTx)
+                        callServiceSettingsStore.setHighDataInterfaces(newHighDataPref, tx: writeTx)
                     }
                 }
             })
@@ -169,11 +170,10 @@ class DataSettingsTableViewController: OWSTableViewController2 {
     }
 
     private func showSentMediaQualityPreferences() {
-        let vc = SentMediaQualitySettingsViewController { [weak self] isHighQuality in
+        let vc = SentMediaQualitySettingsViewController.loadWithSneakyTransaction { [weak self] imageQuality in
             guard let self else { return }
-            SSKEnvironment.shared.databaseStorageRef.write { tx in
-                ImageQualityLevel.setUserSelectedHighQuality(isHighQuality, tx: tx)
-            }
+            let databaseStorage = SSKEnvironment.shared.databaseStorageRef
+            databaseStorage.write { tx in ImageQuality.setValue(imageQuality, tx: tx) }
             self.updateTableContents()
         }
         navigationController?.pushViewController(vc, animated: true)

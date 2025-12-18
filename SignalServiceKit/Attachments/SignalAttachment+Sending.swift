@@ -5,26 +5,26 @@
 
 import Foundation
 
-extension SignalAttachment {
+extension SendableAttachment {
 
     public struct ForSending {
         public let dataSource: AttachmentDataSource
-        public let isViewOnce: Bool
         public let renderingFlag: AttachmentReference.RenderingFlag
 
-        public init(dataSource: AttachmentDataSource, isViewOnce: Bool, renderingFlag: AttachmentReference.RenderingFlag) {
+        public init(dataSource: AttachmentDataSource, renderingFlag: AttachmentReference.RenderingFlag) {
             self.dataSource = dataSource
-            self.isViewOnce = isViewOnce
             self.renderingFlag = renderingFlag
         }
     }
 
-    public func forSending() async throws -> ForSending {
-        let dataSource = try await self.buildAttachmentDataSource()
-        return .init(
+    public func forSending(attachmentContentValidator: any AttachmentContentValidator) async throws -> ForSending {
+        let dataSource = try await attachmentContentValidator.validateContents(
+            sendableAttachment: self,
+            shouldUseDefaultFilename: true,
+        )
+        return ForSending(
             dataSource: dataSource,
-            isViewOnce: self.isViewOnceAttachment,
-            renderingFlag: self.renderingFlag
+            renderingFlag: self.renderingFlag,
         )
     }
 }

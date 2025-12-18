@@ -31,13 +31,13 @@ class GifPickerNavigationViewController: OWSNavigationController {
 }
 
 extension GifPickerNavigationViewController: GifPickerViewControllerDelegate {
-    func gifPickerDidSelect(attachment: SignalAttachment) {
+    func gifPickerDidSelect(attachment: PreviewableAttachment) {
         AssertIsOnMainThread()
 
         let attachmentApprovalItem = AttachmentApprovalItem(attachment: attachment, canSave: false)
-        let attachmentApproval = AttachmentApprovalViewController(
-            options: self.hasQuotedReplyDraft ? [.disallowViewOnce] : [],
+        let attachmentApproval = AttachmentApprovalViewController.loadWithSneakyTransaction(
             attachmentApprovalItems: [attachmentApprovalItem],
+            options: self.hasQuotedReplyDraft ? [.disallowViewOnce] : [],
         )
         attachmentApproval.approvalDataSource = self
         attachmentApproval.setMessageBody(initialMessageBody, txProvider: DependenciesBridge.shared.db.readTxProvider)
@@ -55,8 +55,12 @@ extension GifPickerNavigationViewController: GifPickerViewControllerDelegate {
 
 extension GifPickerNavigationViewController: AttachmentApprovalViewControllerDelegate {
 
-    func attachmentApproval(_ attachmentApproval: AttachmentApprovalViewController, didApproveAttachments attachments: [SignalAttachment], messageBody: MessageBody?) {
-        approvalDelegate?.attachmentApproval(attachmentApproval, didApproveAttachments: attachments, messageBody: messageBody)
+    func attachmentApproval(
+        _ attachmentApproval: AttachmentApprovalViewController,
+        didApproveAttachments approvedAttachments: ApprovedAttachments,
+        messageBody: MessageBody?,
+    ) {
+        approvalDelegate?.attachmentApproval(attachmentApproval, didApproveAttachments: approvedAttachments, messageBody: messageBody)
     }
 
     func attachmentApprovalDidCancel() {
@@ -67,7 +71,7 @@ extension GifPickerNavigationViewController: AttachmentApprovalViewControllerDel
         approvalDelegate?.attachmentApproval(attachmentApproval, didChangeMessageBody: newMessageBody)
     }
 
-    func attachmentApproval(_ attachmentApproval: AttachmentApprovalViewController, didRemoveAttachment attachment: SignalAttachment) { }
+    func attachmentApproval(_ attachmentApproval: AttachmentApprovalViewController, didRemoveAttachment attachmentApprovalItem: AttachmentApprovalItem) { }
 
     func attachmentApprovalDidTapAddMore(_ attachmentApproval: AttachmentApprovalViewController) { }
 
@@ -94,7 +98,7 @@ extension GifPickerNavigationViewController: AttachmentApprovalViewControllerDat
 }
 
 protocol GifPickerViewControllerDelegate: AnyObject {
-    @MainActor func gifPickerDidSelect(attachment: SignalAttachment)
+    @MainActor func gifPickerDidSelect(attachment: PreviewableAttachment)
     @MainActor func gifPickerDidCancel()
 }
 
@@ -494,10 +498,8 @@ class GifPickerViewController: OWSViewController, UISearchBarDelegate, UICollect
         }
     }
 
-    #if compiler(>=6.2)
     @concurrent
-    #endif
-    private nonisolated func buildAttachment(forAsset asset: ProxiedContentAsset) async throws -> SignalAttachment {
+    private nonisolated func buildAttachment(forAsset asset: ProxiedContentAsset) async throws -> PreviewableAttachment {
         guard let giphyAsset = asset.assetDescription as? GiphyAsset else {
             throw OWSAssertionError("Invalid asset description.")
         }
@@ -508,11 +510,11 @@ class GifPickerViewController: OWSViewController, UISearchBarDelegate, UICollect
 
         let consumableFilePath = OWSFileSystem.temporaryFilePath(fileExtension: assetFileExtension)
         try FileManager.default.copyItem(atPath: assetFilePath, toPath: consumableFilePath)
-        let dataSource = try DataSourcePath(filePath: consumableFilePath, shouldDeleteOnDeallocation: false)
+        let dataSource = DataSourcePath(filePath: consumableFilePath, ownership: .owned)
 
         let attachment = try SignalAttachment.attachment(dataSource: dataSource, dataUTI: assetTypeIdentifier)
         attachment.isLoopingVideo = attachment.isVideo
-        return attachment
+        return PreviewableAttachment(rawValue: attachment)
     }
 
     public func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {

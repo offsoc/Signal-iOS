@@ -14,25 +14,16 @@ public import UIKit
 enum PhotoCaptureError: Error {
     case assertionError(description: String)
     case initializationFailed
-    case captureFailed
-    case invalidVideo
-    case videoTooLarge
 }
+
+struct VideoCaptureFailedError: Error {}
 
 extension PhotoCaptureError: LocalizedError, UserErrorDescriptionProvider {
     var localizedDescription: String {
         switch self {
         case .initializationFailed:
             return OWSLocalizedString("PHOTO_CAPTURE_UNABLE_TO_INITIALIZE_CAMERA", comment: "alert title")
-        case .captureFailed:
-            return OWSLocalizedString("PHOTO_CAPTURE_UNABLE_TO_CAPTURE_IMAGE", comment: "alert title")
-        case .videoTooLarge:
-            return OWSLocalizedString(
-                "PHOTO_CAPTURE_VIDEO_SIZE_ERROR",
-                comment: "alert title, generic error preventing user from capturing a video that is too long"
-            )
-
-        case .assertionError, .invalidVideo:
+        case .assertionError:
             return OWSLocalizedString("PHOTO_CAPTURE_GENERIC_ERROR", comment: "alert title, generic error preventing user from capturing a photo")
         }
     }
@@ -41,7 +32,7 @@ extension PhotoCaptureError: LocalizedError, UserErrorDescriptionProvider {
 protocol CameraCaptureSessionDelegate: AnyObject {
 
     func cameraCaptureSessionDidStart(_ session: CameraCaptureSession)
-    func cameraCaptureSession(_ session: CameraCaptureSession, didFinishProcessing attachment: SignalAttachment)
+    func cameraCaptureSession(_ session: CameraCaptureSession, didFinishProcessing attachment: PreviewableAttachment)
     func cameraCaptureSession(_ session: CameraCaptureSession, didFailWith error: Error)
 
     // MARK: Video
@@ -838,55 +829,18 @@ class CameraCaptureSession: NSObject {
         videoCapture.stopRecording()
     }
 
-    private func handleVideoRecording(at outputUrl: URL) {
+    private func handleVideoRecording(at outputUrl: URL) throws {
         AssertIsOnMainThread()
-
-        guard let delegate else { return }
-
-        // TODO: showing an error here feels bad; maybe break the
-        // video up into segments like we do for stories. For now
-        // this is better than the old behavior (fail silently).
-        do {
-            try OWSMediaUtils.validateVideoSize(atPath: outputUrl.path)
-        } catch {
-            return handleVideoCaptureError(PhotoCaptureError.videoTooLarge)
-        }
-
-        do {
-            try OWSMediaUtils.validateVideoExtension(ofPath: outputUrl.path)
-            try OWSMediaUtils.validateVideoAsset(atPath: outputUrl.path)
-        } catch {
-            return handleVideoCaptureError(PhotoCaptureError.invalidVideo)
-        }
-
-        guard let dataSource = try? DataSourcePath(fileUrl: outputUrl, shouldDeleteOnDeallocation: true) else {
-            return handleVideoCaptureError(PhotoCaptureError.captureFailed)
-        }
-
-        let attachment: SignalAttachment
-
-        do throws(SignalAttachmentError) {
-            attachment = try SignalAttachment.videoAttachment(
-                dataSource: dataSource,
-                dataUTI: UTType.mpeg4Movie.identifier,
-            )
-        } catch {
-            return handleVideoCaptureError(error)
-        }
-
-        delegate.cameraCaptureSession(self, didFinishProcessing: attachment)
+        let dataSource = DataSourcePath(fileUrl: outputUrl, ownership: .owned)
+        let attachment = try SignalAttachment.videoAttachment(
+            dataSource: dataSource,
+            dataUTI: UTType.mpeg4Movie.identifier,
+        )
+        delegate?.cameraCaptureSession(self, didFinishProcessing: PreviewableAttachment(rawValue: attachment))
     }
 
     private func handleVideoCaptureError(_ error: Error) {
         AssertIsOnMainThread()
-
-        switch error {
-        case PhotoCaptureError.invalidVideo, PhotoCaptureError.videoTooLarge:
-            Logger.warn("Error: \(error)")
-        default:
-            owsFailDebug("Error: \(error)")
-        }
-
         delegate?.cameraCaptureSession(self, didFailWith: error)
     }
 
@@ -1011,13 +965,12 @@ extension CameraCaptureSession: VideoCaptureDelegate {
     fileprivate func videoCapture(_ videoCapture: VideoCapture, didFinishWith result: Result<URL, Error>) {
         AssertIsOnMainThread()
 
-        switch result {
-        case .success(let outputURL):
+        do {
+            let outputUrl = try result.get()
             if videoRecordingState != .canceling {
-                handleVideoRecording(at: outputURL)
+                try handleVideoRecording(at: outputUrl)
             }
-
-        case .failure(let error):
+        } catch {
             handleVideoCaptureError(error)
         }
 
@@ -1039,18 +992,15 @@ extension CameraCaptureSession: PhotoCaptureDelegate {
         case .failure(let error):
             delegate.cameraCaptureSession(self, didFailWith: error)
         case .success(let photoData):
-            let dataSource = DataSourceValue(photoData, utiType: UTType.jpeg.identifier)
             let attachment: SignalAttachment
-            do throws(SignalAttachmentError) {
-                guard let dataSource else {
-                    throw .missingData
-                }
+            do {
+                let dataSource = try DataSourcePath(writingTempFileData: photoData, fileExtension: "jpg")
                 attachment = try SignalAttachment.imageAttachment(dataSource: dataSource, dataUTI: UTType.jpeg.identifier)
             } catch {
                 delegate.cameraCaptureSession(self, didFailWith: error)
                 return
             }
-            delegate.cameraCaptureSession(self, didFinishProcessing: attachment)
+            delegate.cameraCaptureSession(self, didFinishProcessing: PreviewableAttachment(rawValue: attachment))
         }
     }
 }
@@ -1361,7 +1311,7 @@ private class VideoCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
                 if assetWriter.status == .completed && assetWriter.error == nil {
                     result = .success(assetWriter.outputURL)
                 } else {
-                    result = .failure(PhotoCaptureError.invalidVideo)
+                    result = .failure(VideoCaptureFailedError())
                 }
 
                 DispatchQueue.main.async {

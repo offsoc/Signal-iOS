@@ -404,6 +404,13 @@ public final class MessageReceiver {
                     }
                 }
 
+                if dataMessage.pinMessage != nil || dataMessage.unpinMessage != nil {
+                    guard BuildFlags.PinnedMessages.receive else {
+                        Logger.warn("Pinned messages are not supported on this device")
+                        return
+                    }
+                }
+
                 if dataMessage.hasProfileKey {
                     if let groupId {
                         SSKEnvironment.shared.profileManagerRef.addGroupId(
@@ -540,25 +547,56 @@ public final class MessageReceiver {
                         return
                     }
                 } else if let pollVote = dataMessage.pollVote {
-                       guard let localIdentifiers = DependenciesBridge.shared.tsAccountManager.localIdentifiers(tx: tx) else {
-                           owsFailDebug("Missing local identifiers!")
-                           return
-                       }
-                       do {
-                           guard let (targetMessage, _) = try DependenciesBridge.shared.pollMessageManager.processIncomingPollVote(
-                                voteAuthor: localIdentifiers.aci,
-                                pollVoteProto: pollVote,
-                                transaction: tx
-                           ) else {
-                               Logger.error("error processing poll vote!")
-                               return
-                           }
+                    guard let localIdentifiers = DependenciesBridge.shared.tsAccountManager.localIdentifiers(tx: tx) else {
+                        owsFailDebug("Missing local identifiers!")
+                        return
+                    }
+                    do {
+                        guard let (targetMessage, _) = try DependenciesBridge.shared.pollMessageManager.processIncomingPollVote(
+                            voteAuthor: localIdentifiers.aci,
+                            pollVoteProto: pollVote,
+                            transaction: tx
+                        ) else {
+                            Logger.error("error processing poll vote!")
+                            return
+                        }
 
-                            SSKEnvironment.shared.databaseStorageRef.touch(interaction: targetMessage, shouldReindex: false, tx: tx)
-                       } catch {
-                           Logger.error("Failed to vote in poll \(error)")
-                           return
-                       }
+                        SSKEnvironment.shared.databaseStorageRef.touch(interaction: targetMessage, shouldReindex: false, tx: tx)
+                    } catch {
+                        Logger.error("Failed to vote in poll \(error)")
+                        return
+                    }
+                } else if let pinMessage = dataMessage.pinMessage {
+                    guard let thread = transcript.threadForDataMessage else {
+                        owsFailDebug("Could not process pin message from sync transcript.")
+                        return
+                    }
+                    do {
+                         let targetMessage = try DependenciesBridge.shared.pinnedMessageManager.pinMessage(
+                             pinMessageProto: pinMessage,
+                             pinAuthor: localIdentifiers.aci,
+                             thread: thread,
+                             timestamp: dataMessage.timestamp,
+                             expireTimer: dataMessage.expireTimer,
+                             expireTimerVersion: dataMessage.expireTimerVersion,
+                             transaction: tx
+                         )
+                         SSKEnvironment.shared.databaseStorageRef.touch(interaction: targetMessage, shouldReindex: false, tx: tx)
+                     } catch {
+                         owsFailDebug("Could not pin message \(error)")
+                         return
+                     }
+                } else if let unpinMessage = dataMessage.unpinMessage {
+                     do {
+                         let targetMessage = try DependenciesBridge.shared.pinnedMessageManager.unpinMessage(
+                             unpinMessageProto: unpinMessage,
+                             transaction: tx
+                         )
+
+                         SSKEnvironment.shared.databaseStorageRef.touch(interaction: targetMessage, shouldReindex: false, tx: tx)
+                     } catch {
+                         owsFailDebug("Could not unpin message \(error)")
+                     }
                 } else {
                     guard let localIdentifiers = DependenciesBridge.shared.tsAccountManager.localIdentifiers(tx: tx) else {
                         owsFailDebug("Missing local identifiers!")
@@ -792,7 +830,11 @@ public final class MessageReceiver {
             let pendingTask = Self.buildPendingTask()
             Task {
                 defer { pendingTask.complete() }
-                try? await SSKEnvironment.shared.blockingManagerRef.syncBlockList().value
+                do {
+                    try await SSKEnvironment.shared.blockingManagerRef.syncBlockListIfNecessary(force: true)
+                } catch {
+                    Logger.warn("Failed to send block list sync message! \(error)")
+                }
             }
 
         case .configuration:
@@ -854,6 +896,11 @@ public final class MessageReceiver {
         localIdentifiers: LocalIdentifiers,
         tx: DBWriteTransaction
     ) {
+        guard SDS.fitsInInt64(dataMessage.timestamp) else {
+            Logger.warn("Ignoring dataMessage with too-large timestamp.")
+            return
+        }
+
         let envelope = request.decryptedEnvelope
 
         if let groupId = self.groupId(for: dataMessage) {
@@ -1055,8 +1102,42 @@ public final class MessageReceiver {
             return nil
         }
 
+        if let pollVote = dataMessage.pollVote {
+            do {
+                guard let (targetMessage, shouldNotifyAuthorOfVote) = try DependenciesBridge.shared.pollMessageManager.processIncomingPollVote(
+                    voteAuthor: envelope.sourceAci,
+                    pollVoteProto: pollVote,
+                    transaction: tx
+                ) else {
+                    Logger.error("error processing poll vote!")
+                    return nil
+                }
+
+                // Update interaction in the conversation view
+                SSKEnvironment.shared.databaseStorageRef.touch(interaction: targetMessage, shouldReindex: false, tx: tx)
+
+                if shouldNotifyAuthorOfVote {
+                    // If this is not an unvote, the user is the poll creator and the vote isn't authored by them, send a notification.
+                    if let outgoingMessage = targetMessage as? TSOutgoingMessage {
+                            SSKEnvironment.shared.notificationPresenterRef.notifyUserOfPollVote(
+                                forMessage: outgoingMessage,
+                                voteAuthor: envelope.sourceAci,
+                                thread: thread,
+                                transaction: tx
+                            )
+                    }
+                }
+            } catch {
+                owsFailDebug("Could not insert poll vote!")
+                return nil
+            }
+
+            // Don't store PollVote as a message.
+            return nil
+        }
+
         if request.shouldDiscardVisibleMessages {
-            // Now that "reactions" and "delete for everyone" have been processed, the
+            // Now that "poll votes", "reactions" and "delete for everyone" have been processed, the
             // only possible outcome of further processing is a visible message or
             // group call update, both of which should be discarded.
             Logger.info("Discarding message w/ts \(envelope.timestamp)")
@@ -1279,38 +1360,45 @@ public final class MessageReceiver {
             return nil
         }
 
-        if let pollVote = dataMessage.pollVote {
-            do {
-                guard let (targetMessage, shouldNotifyAuthorOfVote) = try DependenciesBridge.shared.pollMessageManager.processIncomingPollVote(
-                    voteAuthor: envelope.sourceAci,
-                    pollVoteProto: pollVote,
-                    transaction: tx
-                ) else {
-                    Logger.error("error processing poll vote!")
+        if BuildFlags.PinnedMessages.receive,
+           thread.canUserEditPinnedMessages(aci: envelope.sourceAci) {
+            if let pinMessage = dataMessage.pinMessage
+            {
+                do {
+                    let targetMessage = try DependenciesBridge.shared.pinnedMessageManager.pinMessage(
+                        pinMessageProto: pinMessage,
+                        pinAuthor: envelope.sourceAci,
+                        thread: thread,
+                        timestamp: dataMessage.timestamp,
+                        expireTimer: dataMessage.expireTimer,
+                        expireTimerVersion: dataMessage.expireTimerVersion,
+                        transaction: tx
+                    )
+
+                    SSKEnvironment.shared.databaseStorageRef.touch(interaction: targetMessage, shouldReindex: false, tx: tx)
+
+                    return nil
+                } catch {
+                    owsFailDebug("Could not pin message \(error)")
                     return nil
                 }
-
-                // Update interaction in the conversation view
-                SSKEnvironment.shared.databaseStorageRef.touch(interaction: targetMessage, shouldReindex: false, tx: tx)
-
-                if shouldNotifyAuthorOfVote {
-                    // If this is not an unvote, the user is the poll creator and the vote isn't authored by them, send a notification.
-                    if let outgoingMessage = targetMessage as? TSOutgoingMessage {
-                            SSKEnvironment.shared.notificationPresenterRef.notifyUserOfPollVote(
-                                forMessage: outgoingMessage,
-                                voteAuthor: envelope.sourceAci,
-                                thread: thread,
-                                transaction: tx
-                            )
-                    }
-                }
-            } catch {
-                owsFailDebug("Could not insert poll vote!")
-                return nil
             }
 
-            // Don't store PollVote as a message.
-            return nil
+            if let unpinMessage = dataMessage.unpinMessage {
+                do {
+                    let targetMessage = try DependenciesBridge.shared.pinnedMessageManager.unpinMessage(
+                        unpinMessageProto: unpinMessage,
+                        transaction: tx
+                    )
+
+                    SSKEnvironment.shared.databaseStorageRef.touch(interaction: targetMessage, shouldReindex: false, tx: tx)
+
+                    return nil
+                } catch {
+                    owsFailDebug("Could not unpin message \(error)")
+                    return nil
+                }
+            }
         }
 
         // Legit usage of senderTimestamp when creating an incoming group message
@@ -2000,6 +2088,9 @@ public final class MessageReceiver {
 
         guard let dataMessage = editMessage.dataMessage else {
             throw OWSAssertionError("Missing dataMessage in edit")
+        }
+        guard SDS.fitsInInt64(dataMessage.timestamp) else {
+            throw OWSAssertionError("dataMessage in edit had too-large timestamp! \(dataMessage.timestamp)")
         }
 
         let message = try DependenciesBridge.shared.editManager.processIncomingEditMessage(

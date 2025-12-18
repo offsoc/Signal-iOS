@@ -245,15 +245,8 @@ class BackupSettingsViewController:
                         switch result {
                         case .success:
                             break
-                        case .failure(let exportJobError):
-                            switch exportJobError {
-                            case .cancellationError, .needsWifi, .networkRequestError:
-                                Logger.warn("Failed to perform manual backup! \(exportJobError)")
-                            case .backupError, .backupKeyError, .unregistered:
-                                owsFailDebug("Failed to perform manual backup! \(exportJobError)")
-                            }
-
-                            showSheetForBackupExportJobError(exportJobError)
+                        case .failure(let error):
+                            showSheetForBackupExportJobError(error)
                         }
 
                         db.read { tx in
@@ -498,8 +491,6 @@ class BackupSettingsViewController:
         planSelection: BackupSettingsViewModel.EnableBackupsPlanSelection,
         shouldShowWelcomeToBackupsSheet: Bool,
     ) {
-        // TODO: [Backups] Show the rest of the onboarding flow.
-
         Task {
             switch planSelection {
             case .required(let planSelection):
@@ -885,13 +876,13 @@ class BackupSettingsViewController:
         }
     }
 
-    private func showSheetForBackupExportJobError(_ error: BackupExportJobError) {
+    private func showSheetForBackupExportJobError(_ error: Error) {
         let actionSheet: ActionSheetController
         switch error {
-        case .cancellationError:
+        case is CancellationError:
             return
 
-        case .needsWifi:
+        case BackupExportJobError.needsWifi:
             actionSheet = ActionSheetController(
                 title: OWSLocalizedString(
                     "BACKUP_SETTINGS_BACKUP_EXPORT_ERROR_SHEET_NEED_WIFI_TITLE",
@@ -916,7 +907,7 @@ class BackupSettingsViewController:
             ))
             actionSheet.addAction(.cancel)
 
-        case .networkRequestError:
+        case _ where error.isNetworkFailureOrTimeout || error.is5xxServiceResponse:
             actionSheet = ActionSheetController(
                 message: OWSLocalizedString(
                     "BACKUP_SETTINGS_BACKUP_EXPORT_ERROR_SHEET_NETWORK_ERROR",
@@ -925,7 +916,7 @@ class BackupSettingsViewController:
             )
             actionSheet.addAction(.okay)
 
-        case .unregistered, .backupKeyError, .backupError:
+        default:
             actionSheet = ActionSheetController(
                 message: OWSLocalizedString(
                     "BACKUP_SETTINGS_BACKUP_EXPORT_ERROR_SHEET_GENERIC_ERROR",
@@ -1395,20 +1386,6 @@ class BackupSettingsViewController:
                 "BACKUP_SETTINGS_IAP_NOT_FOUND_LOCALLY_SHEET_GOT_IT_BUTTON",
                 comment: "Button for a sheet explaining that the user's Backups subscription was not found on this device.",
             )),
-            secondaryButton: HeroSheetViewController.Button(
-                title: CommonStrings.contactSupport,
-                style: .secondary,
-                action: .custom({ sheet in
-                    sheet.dismiss(animated: true) { [weak self] in
-                        guard let self else { return }
-                        ContactSupportActionSheet.present(
-                            emailFilter: .custom("BackupIAPNotFoundLocally"),
-                            logDumper: .fromGlobals(),
-                            fromViewController: self,
-                        )
-                    }
-                }),
-            )
         )
 
         present(notFoundLocallySheet, animated: true)

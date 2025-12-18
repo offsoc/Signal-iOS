@@ -27,22 +27,12 @@ public class AttachmentContentValidatorImpl: AttachmentContentValidator {
     }
 
     public func validateContents(
-        dataSource: DataSource,
-        shouldConsume: Bool,
+        dataSource: DataSourcePath,
         mimeType: String,
         renderingFlag: AttachmentReference.RenderingFlag,
         sourceFilename: String?
     ) async throws -> PendingAttachment {
-        let inputType: InputType = {
-            if
-                let fileDataSource = dataSource as? DataSourcePath,
-                let fileUrl = fileDataSource.dataUrl
-            {
-                return .unencryptedFile(fileUrl)
-            } else {
-                return .inMemory(dataSource.data)
-            }
-        }()
+        let inputType: InputType = .unencryptedFile(dataSource.fileUrl)
         let primaryFilePlaintextHash = try computePlaintextHash(inputType: inputType)
         let attachmentKey = try attachmentKeyToUse(primaryFilePlaintextHash: primaryFilePlaintextHash, inputAttachmentKey: nil)
         let pendingAttachment = try await validateContents(
@@ -55,11 +45,7 @@ public class AttachmentContentValidatorImpl: AttachmentContentValidator {
                 sourceFilename: sourceFilename
             )]
         ).values.first!
-
-        if shouldConsume {
-            try dataSource.consumeAndDelete()
-        }
-
+        try dataSource.consumeAndDeleteIfNecessary()
         return pendingAttachment
     }
 

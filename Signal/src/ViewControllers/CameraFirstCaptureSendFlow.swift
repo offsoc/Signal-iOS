@@ -16,8 +16,8 @@ class CameraFirstCaptureSendFlow {
 
     private weak var delegate: CameraFirstCaptureDelegate?
 
-    private var approvedAttachments: [SignalAttachment]?
-    private var approvalMessageBody: MessageBody?
+    private var approvedAttachments: ApprovedAttachments?
+    private var approvedMessageBody: MessageBody?
     private var textAttachment: UnsentTextAttachment?
 
     private var mentionCandidates: [Aci] = []
@@ -62,13 +62,17 @@ extension CameraFirstCaptureSendFlow: SendMediaNavDelegate {
         delegate?.cameraFirstCaptureSendFlowDidCancel(self)
     }
 
-    func sendMediaNav(_ sendMediaNavigationController: SendMediaNavigationController, didApproveAttachments attachments: [SignalAttachment], messageBody: MessageBody?) {
-        self.approvedAttachments = attachments
-        self.approvalMessageBody = messageBody
+    func sendMediaNav(
+        _ sendMediaNavigationController: SendMediaNavigationController,
+        didApproveAttachments approvedAttachments: ApprovedAttachments,
+        messageBody: MessageBody?,
+    ) {
+        self.approvedAttachments = approvedAttachments
+        self.approvedMessageBody = messageBody
 
         let pickerVC = ConversationPickerViewController(
             selection: selection,
-            attachments: attachments
+            attachments: approvedAttachments.attachments,
         )
         pickerVC.pickerDelegate = self
         pickerVC.shouldBatchUpdateIdentityKeys = true
@@ -84,7 +88,7 @@ extension CameraFirstCaptureSendFlow: SendMediaNavDelegate {
     func sendMediaNav(_ sendMediaNavigationController: SendMediaNavigationController, didFinishWithTextAttachment textAttachment: UnsentTextAttachment) {
         self.textAttachment = textAttachment
 
-        let pickerVC = ConversationPickerViewController(selection: selection, textAttacment: textAttachment)
+        let pickerVC = ConversationPickerViewController(selection: selection, textAttachment: textAttachment)
         pickerVC.pickerDelegate = self
         pickerVC.shouldBatchUpdateIdentityKeys = true
         if showsStoriesInPicker || storiesOnly {
@@ -96,11 +100,17 @@ extension CameraFirstCaptureSendFlow: SendMediaNavDelegate {
         sendMediaNavigationController.pushViewController(pickerVC, animated: true)
     }
 
-    func sendMediaNav(_ sendMediaNavigationController: SendMediaNavigationController, didChangeMessageBody newMessageBody: MessageBody?) {
-        self.approvalMessageBody = newMessageBody
+    func sendMediaNav(
+        _ sendMediaNavigationController: SendMediaNavigationController,
+        didChangeMessageBody newMessageBody: MessageBody?,
+    ) {
+        // Nothing to do -- this is a conversation view feature.
     }
 
-    func sendMediaNav(_ sendMediaNavigationController: SendMediaNavigationController, didChangeViewOnceState isViewOnce: Bool) {
+    func sendMediaNav(
+        _ sendMediaNavigationController: SendMediaNavigationController,
+        didChangeViewOnceState isViewOnce: Bool,
+    ) {
         guard !self.storiesOnly else { return }
         // Don't enable view once media to send to stories.
         self.showsStoriesInPicker = !isViewOnce
@@ -110,11 +120,11 @@ extension CameraFirstCaptureSendFlow: SendMediaNavDelegate {
 extension CameraFirstCaptureSendFlow: SendMediaNavDataSource {
 
     func sendMediaNavInitialMessageBody(_ sendMediaNavigationController: SendMediaNavigationController) -> MessageBody? {
-        return approvalMessageBody
+        return nil
     }
 
     var sendMediaNavTextInputContextIdentifier: String? {
-        nil
+        return nil
     }
 
     var sendMediaNavRecipientNames: [String] {
@@ -137,46 +147,42 @@ extension CameraFirstCaptureSendFlow: ConversationPickerDelegate {
     }
 
     public func conversationPickerDidCompleteSelection(_ conversationPickerViewController: ConversationPickerViewController) {
-        if let textAttachment = textAttachment {
+        if let textAttachment {
             let selectedStoryItems = selectedConversations.filter { $0 is StoryConversationItem }
             guard !selectedStoryItems.isEmpty else {
                 owsFailDebug("Selection was unexpectedly empty.")
                 delegate?.cameraFirstCaptureSendFlowDidCancel(self)
                 return
             }
-
-            firstly {
-                AttachmentMultisend.sendTextAttachment(
-                    textAttachment,
-                    to: selectedStoryItems
-                ).enqueuedPromise
-            }.done { _ in
-                self.delegate?.cameraFirstCaptureSendFlowDidComplete(self)
-            }.catch { error in
-                owsFailDebug("Error: \(error)")
+            Task { @MainActor in
+                do {
+                    _ = try await AttachmentMultisend.enqueueTextAttachment(textAttachment, to: selectedStoryItems)
+                    self.delegate?.cameraFirstCaptureSendFlowDidComplete(self)
+                } catch {
+                    owsFailDebug("\(error)")
+                }
             }
-
             return
         }
-
-        guard let approvedAttachments = self.approvedAttachments else {
-            owsFailDebug("approvedAttachments was unexpectedly nil")
-            delegate?.cameraFirstCaptureSendFlowDidCancel(self)
+        if let approvedAttachments {
+            let approvedMessageBody = self.approvedMessageBody
+            let selectedConversations = self.selectedConversations
+            Task { @MainActor in
+                do {
+                    _ = try await AttachmentMultisend.enqueueApprovedMedia(
+                        conversations: selectedConversations,
+                        approvedMessageBody: approvedMessageBody,
+                        approvedAttachments: approvedAttachments
+                    )
+                    self.delegate?.cameraFirstCaptureSendFlowDidComplete(self)
+                } catch {
+                    owsFailDebug("\(error)")
+                }
+            }
             return
         }
-
-        let conversations = selectedConversations
-        firstly {
-            AttachmentMultisend.sendApprovedMedia(
-                conversations: conversations,
-                approvedMessageBody: self.approvalMessageBody,
-                approvedAttachments: approvedAttachments
-            ).enqueuedPromise
-        }.done { _ in
-            self.delegate?.cameraFirstCaptureSendFlowDidComplete(self)
-        }.catch { error in
-            owsFailDebug("Error: \(error)")
-        }
+        owsFailDebug("completed without anything to send")
+        delegate?.cameraFirstCaptureSendFlowDidCancel(self)
     }
 
     public func conversationPickerCanCancel(_ conversationPickerViewController: ConversationPickerViewController) -> Bool {

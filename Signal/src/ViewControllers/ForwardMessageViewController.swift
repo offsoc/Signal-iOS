@@ -124,7 +124,7 @@ class ForwardMessageViewController: OWSNavigationController {
         from fromViewController: UIViewController,
         delegate: ForwardMessageDelegate
     ) {
-        var attachments: [SignalAttachment] = []
+        var attachments: [PreviewableAttachment] = []
         var textAttachment: TextAttachment?
         switch storyMessage.attachment {
         case .media:
@@ -342,28 +342,26 @@ extension ForwardMessageViewController {
         } else if !item.attachments.isEmpty {
             // TODO: What about link previews in this case?
             let conversations = selectedConversations
-            _ = try await AttachmentMultisend.sendApprovedMedia(
+            _ = try await AttachmentMultisend.enqueueApprovedMedia(
                 conversations: conversations,
                 approvedMessageBody: item.messageBody,
-                approvedAttachments: item.attachments,
-            ).enqueuedPromise.awaitable()
+                approvedAttachments: ApprovedAttachments(nonViewOnceAttachments: item.attachments, imageQuality: .high),
+            )
         } else if let textAttachment = item.textAttachment {
             // TODO: we want to reuse the uploaded link preview image attachment instead of re-uploading
             // if the original was sent recently (if not the image could be stale)
-            _ = try await AttachmentMultisend.sendTextAttachment(
+            _ = try await AttachmentMultisend.enqueueTextAttachment(
                 textAttachment.asUnsentAttachment(), to: selectedConversations
-            ).enqueuedPromise.awaitable()
+            )
         } else if let messageBody = item.messageBody {
             let linkPreviewDraft = item.linkPreviewDraft
             await enqueueMessageViaThreadUtil(toRecipientThreads: outgoingMessageRecipientThreads) { recipientThread in
                 self.send(body: messageBody, linkPreviewDraft: linkPreviewDraft, recipientThread: recipientThread)
             }
 
-            // Send the text message to any selected story recipients
-            // as a text story with default styling.
-            let storyConversations = selectedConversations.filter { $0.outgoingMessageType == .storyMessage }
-            let storySendResult = StorySharing.sendTextStory(with: messageBody, linkPreviewDraft: linkPreviewDraft, to: storyConversations)
-            _ = try await storySendResult?.enqueuedPromise.awaitable()
+            // Send the text message to any selected story recipients as a text story
+            // with default styling.
+            _ = try await StorySharing.enqueueTextStory(with: messageBody, linkPreviewDraft: linkPreviewDraft, to: selectedConversations)
         } else {
             throw ForwardError.invalidInteraction
         }
@@ -526,7 +524,7 @@ extension ForwardMessageViewController {
 struct ForwardMessageItem {
     let interaction: TSInteraction?
 
-    let attachments: [SignalAttachment]
+    let attachments: [PreviewableAttachment]
     let contactShare: ContactShareViewModel?
     let messageBody: MessageBody?
     let linkPreviewDraft: OWSLinkPreviewDraft?
@@ -536,7 +534,7 @@ struct ForwardMessageItem {
 
     fileprivate init(
         interaction: TSInteraction? = nil,
-        attachments: [SignalAttachment] = [],
+        attachments: [PreviewableAttachment] = [],
         contactShare: ContactShareViewModel? = nil,
         messageBody: MessageBody? = nil,
         linkPreviewDraft: OWSLinkPreviewDraft? = nil,
@@ -592,7 +590,7 @@ struct ForwardMessageItem {
             }
         }
 
-        var attachments: [SignalAttachment] = []
+        var attachments: [PreviewableAttachment] = []
         var contactShare: ContactShareViewModel?
         var stickerMetadata: (any StickerMetadata)?
         var stickerAttachment: AttachmentStream?
@@ -712,7 +710,7 @@ private struct ForwardMessageContent {
     var canSendToStories: Bool {
         return allItems.allSatisfy { item in
             if !item.attachments.isEmpty {
-                return item.attachments.allSatisfy({ $0.dataSource.isValidImage || $0.dataSource.isValidVideo })
+                return item.attachments.allSatisfy({ $0.isImage || $0.isVideo })
             } else if item.textAttachment != nil {
                 return true
             } else if item.messageBody != nil {

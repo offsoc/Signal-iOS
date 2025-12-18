@@ -7,7 +7,7 @@ import Foundation
 import SignalServiceKit
 
 enum SignalAttachmentCloner {
-    static func cloneAsSignalAttachment(attachment: ReferencedAttachmentStream) throws -> SignalAttachment {
+    static func cloneAsSignalAttachment(attachment: ReferencedAttachmentStream) throws -> PreviewableAttachment {
         guard let dataUTI = MimeTypeUtil.utiTypeForMimeType(attachment.attachmentStream.mimeType) else {
             throw OWSAssertionError("Missing dataUTI.")
         }
@@ -17,10 +17,7 @@ enum SignalAttachmentCloner {
             filename: attachment.reference.sourceFilename
         )
 
-        let decryptedDataSource = try DataSourcePath(
-            fileUrl: decryptedCopyUrl,
-            shouldDeleteOnDeallocation: true
-        )
+        let decryptedDataSource = DataSourcePath(fileUrl: decryptedCopyUrl, ownership: .owned)
         decryptedDataSource.sourceFilename = attachment.reference.sourceFilename
 
         let signalAttachment: SignalAttachment
@@ -36,7 +33,6 @@ enum SignalAttachmentCloner {
             signalAttachment = try SignalAttachment.attachment(dataSource: decryptedDataSource, dataUTI: dataUTI)
             signalAttachment.isLoopingVideo = true
         }
-        signalAttachment.captionText = attachment.reference.storyMediaCaption?.text
-        return signalAttachment
+        return PreviewableAttachment(rawValue: signalAttachment)
     }
 }

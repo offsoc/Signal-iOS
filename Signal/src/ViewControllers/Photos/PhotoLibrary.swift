@@ -95,73 +95,60 @@ class PhotoAlbumContents {
         _ = imageManager.requestImage(for: asset, targetSize: thumbnailSize, contentMode: .aspectFill, options: nil, resultHandler: resultHandler)
     }
 
-    private func requestImageDataSource(for asset: PHAsset) -> Promise<(dataSource: DataSource, dataUTI: String)> {
-        return Promise { future in
-
-            let options: PHImageRequestOptions = PHImageRequestOptions()
-            options.isNetworkAccessAllowed = true
-            options.version = .current
-            options.deliveryMode = .highQualityFormat
-
+    private func requestImageDataSource(for asset: PHAsset) async throws -> (dataSource: DataSourcePath, dataUTI: String) {
+        let options: PHImageRequestOptions = PHImageRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.version = .current
+        options.deliveryMode = .highQualityFormat
+        let (imageData, dataUTI) = await withCheckedContinuation { continuation in
             _ = imageManager.requestImageDataAndOrientation(for: asset, options: options) { imageData, dataUTI, _, _ in
-
-                guard let imageData = imageData else {
-                    future.reject(PhotoLibraryError.assertionError(description: "imageData was unexpectedly nil"))
-                    return
-                }
-
-                guard let dataUTI = dataUTI else {
-                    future.reject(PhotoLibraryError.assertionError(description: "dataUTI was unexpectedly nil"))
-                    return
-                }
-
-                guard let dataSource = DataSourceValue(imageData, utiType: dataUTI) else {
-                    future.reject(PhotoLibraryError.assertionError(description: "dataSource was unexpectedly nil"))
-                    return
-                }
-
-                future.resolve((dataSource: dataSource, dataUTI: dataUTI))
+                continuation.resume(returning: (imageData, dataUTI))
             }
         }
+        guard let imageData else {
+            throw PhotoLibraryError.assertionError(description: "imageData was unexpectedly nil")
+        }
+        guard let dataUTI else {
+            throw PhotoLibraryError.assertionError(description: "dataUTI was unexpectedly nil")
+        }
+        guard let fileExtension = MimeTypeUtil.fileExtensionForUtiType(dataUTI) else {
+            throw PhotoLibraryError.assertionError(description: "fileExtension was unexpectedly nil")
+        }
+        let dataSource = try DataSourcePath(writingTempFileData: imageData, fileExtension: fileExtension)
+        return (dataSource: dataSource, dataUTI: dataUTI)
     }
 
-    private func requestVideoDataSource(for asset: PHAsset) -> Promise<SignalAttachment> {
-        return Promise { future in
+    private func requestVideoDataSource(for asset: PHAsset) async throws -> AVAsset {
+        let options: PHVideoRequestOptions = PHVideoRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.version = .current
 
-            let options: PHVideoRequestOptions = PHVideoRequestOptions()
-            options.isNetworkAccessAllowed = true
-            options.version = .current
-
+        return try await withCheckedThrowingContinuation { continuation in
             _ = imageManager.requestAVAsset(forVideo: asset, options: options) { video, _, info in
-                guard let video = video else {
+                guard let video else {
                     let error = info?[PHImageErrorKey] as! Error?
-                    future.reject(PhotoLibraryError.failedToExportAsset(underlyingError: error))
+                    continuation.resume(throwing: PhotoLibraryError.failedToExportAsset(underlyingError: error))
                     return
                 }
-
-                let baseFilename: String? = nil
-
-                Task {
-                    do {
-                        future.resolve(try await SignalAttachment.compressVideoAsMp4(asset: video, baseFilename: baseFilename))
-                    } catch {
-                        future.reject(error)
-                    }
-                }
+                continuation.resume(returning: video)
             }
         }
     }
 
-    func outgoingAttachment(for asset: PHAsset) -> Promise<SignalAttachment> {
+    func outgoingAttachment(for asset: PHAsset) async throws -> PreviewableAttachment {
         switch asset.mediaType {
         case .image:
-            return requestImageDataSource(for: asset).map(on: DispatchQueue.global()) { (dataSource: DataSource, dataUTI: String) in
-                return try SignalAttachment.imageAttachment(dataSource: dataSource, dataUTI: dataUTI)
-            }
+            let (dataSource, dataUTI) = try await requestImageDataSource(for: asset)
+            let attachment = try SignalAttachment.imageAttachment(dataSource: dataSource, dataUTI: dataUTI)
+            return PreviewableAttachment(rawValue: attachment)
         case .video:
-            return requestVideoDataSource(for: asset)
-        default:
-            return Promise(error: PhotoLibraryError.unsupportedMediaType)
+            let video = try await requestVideoDataSource(for: asset)
+            let attachment = try await SignalAttachment.compressVideoAsMp4(asset: video, baseFilename: nil)
+            return PreviewableAttachment(rawValue: attachment)
+        case .unknown, .audio:
+            fallthrough
+        @unknown default:
+            throw PhotoLibraryError.unsupportedMediaType
         }
     }
 }

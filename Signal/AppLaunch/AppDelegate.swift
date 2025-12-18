@@ -118,7 +118,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         }
 
         appReadiness.runNowOrWhenAppDidBecomeReadySync {
-            self.refreshConnection(isAppActive: false)
+            self.refreshConnection(isAppActive: false, shouldRunCron: false)
         }
 
         clearAppropriateNotificationsAndRestoreBadgeCount()
@@ -191,7 +191,6 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 
         MessageFetchBGRefreshTask.register(appReadiness: appReadiness)
 
-        let deviceBatteryLevelManager = DeviceBatteryLevelManagerImpl()
         let deviceSleepManager = DeviceSleepManagerImpl()
         let keychainStorage = KeychainStorageImpl(isUsingProductionService: TSConstants.isUsingProductionService)
         let deviceTransferService = DeviceTransferService(
@@ -273,7 +272,6 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         let launchContext = LaunchContext(
             appContext: mainAppContext,
             databaseStorage: databaseStorage,
-            deviceBatteryLevelManager: deviceBatteryLevelManager,
             deviceSleepManager: deviceSleepManager,
             keychainStorage: keychainStorage,
             launchStartedAt: launchStartedAt,
@@ -396,14 +394,13 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     private struct LaunchContext {
-        var appContext: MainAppContext
+        let appContext: MainAppContext
         var databaseStorage: SDSDatabaseStorage
-        var deviceBatteryLevelManager: DeviceBatteryLevelManagerImpl
-        var deviceSleepManager: DeviceSleepManagerImpl
-        var keychainStorage: any KeychainStorage
-        var launchStartedAt: CFTimeInterval
-        var incrementalMessageTSAttachmentMigrationStore: IncrementalTSAttachmentMigrationStore
-        var incrementalMessageTSAttachmentMigratorFactory: IncrementalMessageTSAttachmentMigratorFactory
+        let deviceSleepManager: DeviceSleepManagerImpl
+        let keychainStorage: any KeychainStorage
+        let launchStartedAt: CFTimeInterval
+        let incrementalMessageTSAttachmentMigrationStore: IncrementalTSAttachmentMigrationStore
+        let incrementalMessageTSAttachmentMigratorFactory: IncrementalMessageTSAttachmentMigratorFactory
     }
 
     private func launchApp(
@@ -447,7 +444,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         let dataMigrationContinuation = globalsContinuation.initGlobals(
             appReadiness: appReadiness,
             backupArchiveErrorPresenterFactory: BackupArchiveErrorPresenterFactoryInternal(),
-            deviceBatteryLevelManager: launchContext.deviceBatteryLevelManager,
+            deviceBatteryLevelManager: DeviceBatteryLevelManagerImpl(),
             deviceSleepManager: launchContext.deviceSleepManager,
             paymentsEvents: PaymentsEventsMainApp(),
             mobileCoinHelper: MobileCoinHelperSDK(),
@@ -470,6 +467,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
                 callLinkStore: dataMigrationContinuation.dependenciesBridge.callLinkStore,
                 callRecordDeleteManager: dataMigrationContinuation.dependenciesBridge.callRecordDeleteManager,
                 callRecordStore: dataMigrationContinuation.dependenciesBridge.callRecordStore,
+                callServiceSettingsStore: CallServiceSettingsStore(),
                 db: dataMigrationContinuation.dependenciesBridge.db,
                 deviceSleepManager: launchContext.deviceSleepManager,
                 mutableCurrentCall: _currentCall,
@@ -602,18 +600,43 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         owsPrecondition(!CurrentAppContext().isRunningTests)
 
         let appContext = launchContext.appContext
+        let dependenciesBridge = DependenciesBridge.shared
+        let cron = dependenciesBridge.cron
 
         SignalApp.shared.performInitialSetup(appReadiness: appReadiness)
 
-        appReadiness.runNowOrWhenAppDidBecomeReadyAsync {
-            // This runs every 24 hours or so.
-            let messageSendLog = SSKEnvironment.shared.messageSendLogRef
-            messageSendLog.cleanUpAndScheduleNextOccurrence()
-        }
+        let messageSendLog = SSKEnvironment.shared.messageSendLogRef
+        cron.schedulePeriodically(
+            uniqueKey: .cleanUpMessageSendLog,
+            approximateInterval: .day,
+            mustBeRegistered: false,
+            mustBeConnected: false,
+            operation: { try await messageSendLog.cleanUpExpiredEntries() },
+        )
 
-        appReadiness.runNowOrWhenAppDidBecomeReadyAsync {
-            OWSOrphanDataCleaner.auditOnLaunchIfNecessary()
-        }
+        var orphanedDataCleanerFailureCount = 0
+        cron.schedulePeriodically(
+            uniqueKey: .cleanUpOrphanedData,
+            approximateInterval: 2 * .week,
+            mustBeRegistered: true,
+            mustBeConnected: false,
+            operation: {
+                // Prior to Cron, if the orphaned data cleaner encountered 3 errors, it
+                // would give up until the app restarted. We maintain a similar behavior
+                // here by throwing OWSRetryableErrors that bypass the cleanup operation
+                // that's likely hitting repeated timeouts.
+                // TODO: Make this better; remove this hack.
+                if orphanedDataCleanerFailureCount >= 3 {
+                    throw OWSRetryableError()
+                }
+                do {
+                    try await OWSOrphanDataCleaner.cleanUp(shouldRemoveOrphanedData: true)
+                } catch {
+                    orphanedDataCleanerFailureCount += 1
+                    throw error
+                }
+            },
+        )
 
         appReadiness.runNowOrWhenAppDidBecomeReadyAsync {
             Task.detached(priority: .low) {
@@ -660,13 +683,28 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             }
         }
 
-        appReadiness.runNowOrWhenAppDidBecomeReadyAsync {
-            StaleProfileFetcher(
-                db: DependenciesBridge.shared.db,
-                profileFetcher: SSKEnvironment.shared.profileFetcherRef,
-                tsAccountManager: DependenciesBridge.shared.tsAccountManager
-            ).scheduleProfileFetches()
-        }
+        cron.schedulePeriodically(
+            uniqueKey: .fetchStaleProfiles,
+            approximateInterval: .day,
+            mustBeRegistered: true,
+            mustBeConnected: true,
+            operation: {
+                try await StaleProfileFetcher(
+                    db: DependenciesBridge.shared.db,
+                    profileFetcher: SSKEnvironment.shared.profileFetcherRef,
+                    tsAccountManager: DependenciesBridge.shared.tsAccountManager,
+                ).fetchSomeStaleProfiles()
+            },
+        )
+
+        let groupV2Updates = SSKEnvironment.shared.groupV2UpdatesRef
+        cron.schedulePeriodically(
+            uniqueKey: .fetchStaleGroup,
+            approximateInterval: .day,
+            mustBeRegistered: true,
+            mustBeConnected: true,
+            operation: { try await groupV2Updates.autoRefreshGroup() },
+        )
 
         appReadiness.runNowOrWhenAppDidBecomeReadyAsync {
             Task.detached(priority: .low) {
@@ -677,14 +715,17 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             }
         }
 
-        appReadiness.runNowOrWhenAppDidBecomeReadyAsync {
-            Task {
-                try? await RemoteMegaphoneFetcher(
-                    databaseStorage: SSKEnvironment.shared.databaseStorageRef,
-                    signalService: SSKEnvironment.shared.signalServiceRef
-                ).syncRemoteMegaphonesIfNecessary()
-            }
-        }
+        let remoteMegaphoneFetcher = RemoteMegaphoneFetcher(
+            databaseStorage: SSKEnvironment.shared.databaseStorageRef,
+            signalService: SSKEnvironment.shared.signalServiceRef,
+        )
+        cron.schedulePeriodically(
+            uniqueKey: .fetchMegaphones,
+            approximateInterval: 3 * .day,
+            mustBeRegistered: false,
+            mustBeConnected: true,
+            operation: { try await remoteMegaphoneFetcher.syncRemoteMegaphones() },
+        )
 
         appReadiness.runNowOrWhenAppDidBecomeReadyAsync {
             DependenciesBridge.shared.orphanedAttachmentCleaner.beginObserving()
@@ -705,9 +746,38 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             AppEnvironment.shared.ownedObjects.append(fetchJobRunner)
         }
 
-        appReadiness.runNowOrWhenMainAppDidBecomeReadyAsync {
-            ViewOnceMessages.startExpiringWhenNecessary()
-        }
+        cron.schedulePeriodically(
+            uniqueKey: .cleanUpViewOnceMessages,
+            approximateInterval: .day,
+            mustBeRegistered: false,
+            mustBeConnected: false,
+            operation: { try await ViewOnceMessages.expireIfNecessary() },
+        )
+
+        let tsAccountManager = DependenciesBridge.shared.tsAccountManager
+
+        let backupRefreshManager = BackupRefreshManager(
+            accountKeyStore: DependenciesBridge.shared.accountKeyStore,
+            backupRequestManager: DependenciesBridge.shared.backupRequestManager,
+            backupSettingsStore: BackupSettingsStore(),
+            db: DependenciesBridge.shared.db,
+            networkManager: SSKEnvironment.shared.networkManagerRef,
+        )
+        cron.schedulePeriodically(
+            uniqueKey: .refreshBackup,
+            approximateInterval: BackupRefreshManager.backupRefreshTimeInterval,
+            mustBeRegistered: true,
+            mustBeConnected: true,
+            operation: {
+                guard let localIdentifiers = tsAccountManager.localIdentifiersWithMaybeSneakyTransaction else {
+                    throw OWSAssertionError("never registered")
+                }
+                try await backupRefreshManager.refreshBackup(localIdentifiers: localIdentifiers)
+            },
+        )
+
+        let storageServiceManager = SSKEnvironment.shared.storageServiceManagerRef
+        storageServiceManager.registerForCron(cron)
 
         // Note that this does much more than set a flag; it will also run all deferred blocks.
         appReadiness.setAppIsReadyUIStillPending()
@@ -723,33 +793,71 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             appContext.appUserDefaults().removeObject(forKey: Constants.appLaunchesAttemptedKey)
         }
 
-        let tsAccountManager = DependenciesBridge.shared.tsAccountManager
         let recipientDatabaseTable = DependenciesBridge.shared.recipientDatabaseTable
-        let tsRegistrationState: TSRegistrationState = SSKEnvironment.shared.databaseStorageRef.read { tx in
-            let registrationState = tsAccountManager.registrationState(tx: tx)
-            if registrationState.isRegistered, let localIdentifiers = tsAccountManager.localIdentifiers(tx: tx) {
+        let registeredState = try? tsAccountManager.registeredStateWithMaybeSneakyTransaction()
+        SSKEnvironment.shared.databaseStorageRef.read { tx in
+            if let registeredState {
+                let localIdentifiers = registeredState.localIdentifiers
                 let deviceId = tsAccountManager.storedDeviceId(tx: tx)
                 let localRecipient = recipientDatabaseTable.fetchRecipient(serviceId: localIdentifiers.aci, transaction: tx)
                 let deviceCount = localRecipient?.deviceIds.count ?? 0
                 let linkedDeviceMessage = deviceCount > 1 ? "\(deviceCount) devices including the primary" : "no linked devices"
                 Logger.info("localAci: \(localIdentifiers.aci), deviceId: \(deviceId) (\(linkedDeviceMessage))")
             }
-            return registrationState
         }
+
+        let profileManager = SSKEnvironment.shared.profileManagerRef
+        cron.schedulePeriodically(
+            uniqueKey: .fetchLocalProfile,
+            approximateInterval: .day,
+            mustBeRegistered: true,
+            mustBeConnected: true,
+            operation: {
+                do {
+                    _ = try await profileManager.fetchLocalUsersProfile(authedAccount: .implicit())
+                    // Don't remove this -- fetching the local user's profile is special-cased
+                    // and won't download the avatar via the normal mechanism.
+                    try await profileManager.downloadAndDecryptLocalUserAvatarIfNeeded(authedAccount: .implicit())
+                } catch {
+                    Logger.warn("Couldn't fetch local user profile or avatar: \(error)")
+                    throw error
+                }
+            },
+        )
+
+        cron.schedulePeriodically(
+            uniqueKey: .fetchEmojiSearch,
+            approximateInterval: 3 * .day,
+            mustBeRegistered: false,
+            mustBeConnected: true,
+            operation: { try await EmojiSearchIndex.updateManifest() },
+        )
+
+        let blockingManager = SSKEnvironment.shared.blockingManagerRef
+        cron.scheduleFrequently(
+            mustBeRegistered: true,
+            mustBeConnected: true,
+            operation: {
+                try await blockingManager.syncBlockListIfNecessary(force: false)
+            },
+            handleResult: { _ in
+                // Handled internally by BlockingManager.
+            },
+        )
 
         // Fetch messages as soon as possible after launching. In particular, when
         // launching from the background, without this, we end up waiting some extra
         // seconds before receiving an actionable push notification.
         if !appContext.isMainAppAndActive {
-            self.refreshConnection(isAppActive: false)
+            self.refreshConnection(isAppActive: false, shouldRunCron: false)
         }
 
-        if tsRegistrationState.isRegistered {
+        if registeredState != nil {
             // This should happen at any launch, background or foreground.
             SyncPushTokensJob.run()
         }
 
-        if tsRegistrationState.isRegistered {
+        if registeredState != nil {
             Task {
                 do {
                     try await APNSRotationStore.rotateIfNeededOnAppLaunchAndReadiness(
@@ -766,26 +874,11 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             }
         }
 
-        if tsRegistrationState.isRegistered {
-            Task {
-                do {
-                    _ = try await SSKEnvironment.shared.profileManagerRef.fetchLocalUsersProfile(authedAccount: .implicit())
-                    // Don't remove this -- fetching the local user's profile is special-cased
-                    // and won't download the avatar via the normal mechanism.
-                    try await SSKEnvironment.shared.profileManagerRef.downloadAndDecryptLocalUserAvatarIfNeeded(
-                        authedAccount: .implicit()
-                    )
-                } catch {
-                    Logger.warn("Couldn't fetch local user profile or avatar: \(error)")
-                }
-            }
-        }
-
         DebugLogger.shared.postLaunchLogCleanup(appContext: appContext)
         AppVersionImpl.shared.mainAppLaunchDidComplete()
 
         scheduleBgAppRefresh()
-        Self.updateApplicationShortcutItems(isRegistered: tsRegistrationState.isRegistered)
+        Self.updateApplicationShortcutItems(isRegistered: registeredState != nil)
 
         let notificationCenter = NotificationCenter.default
         notificationCenter.addObserver(
@@ -795,7 +888,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             object: nil
         )
 
-        checkDatabaseIntegrityIfNecessary(isRegistered: tsRegistrationState.isRegistered)
+        checkDatabaseIntegrityIfNecessary(isRegistered: registeredState != nil)
 
         SignalApp.shared.showLaunchInterface(
             launchInterface,
@@ -1295,13 +1388,14 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             Logger.info("Activated.")
         }
 
-        let tsRegistrationState: TSRegistrationState = DependenciesBridge.shared.db.read { tx in
+        let tsAccountManager = DependenciesBridge.shared.tsAccountManager
+        let registeredState = try? tsAccountManager.registeredStateWithMaybeSneakyTransaction()
+
+        if registeredState != nil {
+            DependenciesBridge.shared.db.read { tx in
             // Always check prekeys after app launches, and sometimes check on app activation.
-            let registrationState = DependenciesBridge.shared.tsAccountManager.registrationState(tx: tx)
-            if registrationState.isRegistered {
                 DependenciesBridge.shared.preKeyManager.checkPreKeysIfNecessary(tx: tx)
             }
-            return registrationState
         }
 
         if !hasActivated {
@@ -1313,16 +1407,16 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             // cleaning in the background.
             SSKEnvironment.shared.disappearingMessagesJobRef.startIfNecessary()
 
-            if !tsRegistrationState.isRegistered {
+            if registeredState == nil {
                 // Unregistered user should have no unread messages. e.g. if you delete your account.
                 SSKEnvironment.shared.notificationPresenterRef.clearAllNotifications()
             }
         }
 
-        refreshConnection(isAppActive: true)
+        refreshConnection(isAppActive: true, shouldRunCron: true)
 
         // Every time we become active...
-        if tsRegistrationState.isRegistered {
+        if registeredState != nil {
             // TODO: Should we run this immediately even if we would like to process already decrypted envelopes handed to us by the NSE?
             Task {
                 await SSKEnvironment.shared.groupMessageProcessorManagerRef.startAllProcessors()
@@ -1350,16 +1444,44 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { identityManager.tryToSyncQueuedVerificationStates() }
     }
 
+    // MARK: - Cron
+
+    private func runCron() async {
+        let cron = DependenciesBridge.shared.cron
+        let chatConnectionManager = DependenciesBridge.shared.chatConnectionManager
+        let tsAccountManager = DependenciesBridge.shared.tsAccountManager
+        await cron.runOnce(ctx: CronContext(
+            chatConnectionManager: chatConnectionManager,
+            tsAccountManager: tsAccountManager,
+        ))
+    }
+
     // MARK: - Connections & Fetching
 
     /// Tokens to keep the web socket open when the app is in the foreground.
     private var activeConnectionTokens = [OWSChatConnection.ConnectionToken]()
 
+    /// Task that should be continued/waited for/canceled in the background.
+    @MainActor
+    private var cronTask: Task<Void, Never>?
+
+    @MainActor
+    private func startCronTask() {
+        self.cronTask?.cancel()
+        self.cronTask = Task {
+            await self.runCron()
+            if Task.isCancelled {
+                return
+            }
+            self.cronTask = nil
+        }
+    }
+
     /// A background fetching task that keeps the web socket open while the app
     /// is in the background.
     private var backgroundFetchHandle: BackgroundTaskHandle?
 
-    private func refreshConnection(isAppActive: Bool) {
+    private func refreshConnection(isAppActive: Bool, shouldRunCron: Bool) {
         let chatConnectionManager = DependenciesBridge.shared.chatConnectionManager
 
         let oldActiveConnectionTokens = self.activeConnectionTokens
@@ -1367,7 +1489,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             // If we're active, open a connection.
             self.activeConnectionTokens = chatConnectionManager.requestConnections()
             oldActiveConnectionTokens.forEach { $0.releaseConnection() }
-
+            if shouldRunCron {
+                self.startCronTask()
+            }
             // We're back in the foreground. We've passed off connection management to
             // the foreground logic, so just tear it down without waiting for anything.
             self.backgroundFetchHandle?.interrupt()
@@ -1376,6 +1500,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             let backgroundFetcher = DependenciesBridge.shared.backgroundMessageFetcherFactory.buildFetcher()
             self.activeConnectionTokens = []
             self.backgroundFetchHandle?.interrupt()
+            let cronTask = self.cronTask.take()
             let startDate = MonotonicDate()
             let isPastRegistration = SignalApp.shared.conversationSplitViewController != nil
             self.backgroundFetchHandle = UIApplication.shared.beginBackgroundTask(
@@ -1383,6 +1508,17 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
                     do {
                         await backgroundFetcher.start()
                         oldActiveConnectionTokens.forEach { $0.releaseConnection() }
+                        // If there's a Cron task running that was started in the foreground, wait
+                        // for it to finish.
+                        await withTaskCancellationHandler(
+                            operation: { await cronTask?.value },
+                            onCancel: { cronTask?.cancel() },
+                        )
+                        // If there's a fresh request to run Cron when entering the background,
+                        // start a new Cron instance.
+                        if shouldRunCron {
+                            await self.runCron()
+                        }
                         // This will usually be limited to 30 seconds rather than 3 minutes.
                         let waitDeadline = startDate.adding(180)
                         if isPastRegistration {
@@ -1504,10 +1640,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             break
         case .notHandled:
             let tsAccountManager = DependenciesBridge.shared.tsAccountManager
-            guard tsAccountManager.registrationStateWithMaybeSneakyTransaction.isRegistered else {
-                Logger.info("Ignoring remote notification; user is not registered.")
-                return
-            }
+            _ = try tsAccountManager.registeredStateWithMaybeSneakyTransaction()
             let backgroundMessageFetcher = DependenciesBridge.shared.backgroundMessageFetcherFactory.buildFetcher()
             await backgroundMessageFetcher.start()
 
@@ -1703,23 +1836,24 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         scheduleBgAppRefresh()
 
         let tsAccountManager = DependenciesBridge.shared.tsAccountManager
-        let isRegistered = tsAccountManager.registrationStateWithMaybeSneakyTransaction.isRegistered
-        if isRegistered {
-            appReadiness.runNowOrWhenAppDidBecomeReadySync {
-                SSKEnvironment.shared.databaseStorageRef.write { transaction in
-                    let localAddress = tsAccountManager.localIdentifiers(tx: transaction)?.aciAddress
-                    Logger.info("localAddress: \(String(describing: localAddress))")
-
-                    ExperienceUpgradeFinder.markAllCompleteForNewUser(transaction: transaction)
-                }
+        let registeredState = try? tsAccountManager.registeredStateWithMaybeSneakyTransaction()
+        if let registeredState {
+            Logger.info("localAci: \(registeredState.localIdentifiers.aci)")
+            SSKEnvironment.shared.databaseStorageRef.write { transaction in
+                ExperienceUpgradeFinder.markAllCompleteForNewUser(transaction: transaction)
             }
             DependenciesBridge.shared.attachmentDownloadManager.beginDownloadingIfNecessary()
             Task {
                 try await StickerManager.downloadPendingSickerPacks()
             }
+
+            // Schedule a Cron run if we're in the foreground.
+            if !self.activeConnectionTokens.isEmpty {
+                self.startCronTask()
+            }
         }
 
-        Self.updateApplicationShortcutItems(isRegistered: isRegistered)
+        Self.updateApplicationShortcutItems(isRegistered: registeredState != nil)
     }
 
     // MARK: - Shortcut Items

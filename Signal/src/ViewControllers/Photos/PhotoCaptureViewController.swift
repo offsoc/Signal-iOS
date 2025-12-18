@@ -29,7 +29,7 @@ protocol PhotoCaptureViewControllerDelegate: AnyObject {
 
 protocol PhotoCaptureViewControllerDataSource: AnyObject {
     var numberOfMediaItems: Int { get }
-    func addMedia(attachment: SignalAttachment)
+    func addMedia(attachment: PreviewableAttachment)
 }
 
 class PhotoCaptureViewController: OWSViewController, OWSNavigationChildController {
@@ -1232,8 +1232,7 @@ extension PhotoCaptureViewController {
     }
 
     private func showFailureUI(error: Error) {
-        Logger.error("error: \(error)")
-
+        Logger.warn("error: \(error)")
         OWSActionSheets.showActionSheet(
             title: nil,
             message: error.userErrorDescription,
@@ -1299,14 +1298,16 @@ extension PhotoCaptureViewController: QRCodeSampleBufferScannerDelegate {
         {
             qrCodeScanned = true
 
-            SSKEnvironment.shared.databaseStorageRef.read { tx in
-                UsernameQuerier().queryForUsernameLink(
+            Task {
+                guard let (username, aci) = await UsernameQuerier().queryForUsernameLink(
                     link: usernameLink,
                     fromViewController: self,
-                    tx: tx,
                     failureSheetDismissalDelegate: self,
-                    onSuccess: self.showUsernameLinkSheet(username:aci:)
-                )
+                ) else {
+                    return
+                }
+
+                showUsernameLinkSheet(username: username, aci: aci)
             }
         } else if
             let provisioningURL = DeviceProvisioningURL(urlString: qrCodeString),
@@ -1339,12 +1340,23 @@ extension PhotoCaptureViewController: QRCodeSampleBufferScannerDelegate {
                 linkDeviceWarningActionSheet.addAction(cancelAction)
                 presentActionSheet(linkDeviceWarningActionSheet)
             case .quickRestore:
-                self.dismiss(animated: true) {
-                    AppEnvironment.shared.outgoingDeviceRestorePresenter.present(
-                        provisioningURL: provisioningURL,
-                        presentingViewController: CurrentAppContext().frontmostViewController()!,
-                        animated: true
-                    )
+                let presentBlock = {
+                    self.dismiss(animated: true) {
+                        AppEnvironment.shared.outgoingDeviceRestorePresenter.present(
+                            provisioningURL: provisioningURL,
+                            presentingViewController: CurrentAppContext().frontmostViewController()!,
+                            animated: true
+                        )
+                    }
+                }
+                // If anything is presented over the phone capture view, dismiss it first -
+                // then dismiss the photo view and present the restore UI
+                if navigationController?.presentedViewController != nil {
+                    self.navigationController?.presentedViewController?.dismiss(animated: true) {
+                        presentBlock()
+                    }
+                } else {
+                    presentBlock()
                 }
             }
         }
@@ -1427,7 +1439,7 @@ extension PhotoCaptureViewController: CameraCaptureSessionDelegate {
         }
     }
 
-    func cameraCaptureSession(_ session: CameraCaptureSession, didFinishProcessing attachment: SignalAttachment) {
+    func cameraCaptureSession(_ session: CameraCaptureSession, didFinishProcessing attachment: PreviewableAttachment) {
         dataSource?.addMedia(attachment: attachment)
 
         updateDoneButtonAppearance()
@@ -1442,7 +1454,7 @@ extension PhotoCaptureViewController: CameraCaptureSessionDelegate {
     func cameraCaptureSession(_ session: CameraCaptureSession, didFailWith error: Error) {
         setIsRecordingVideo(false, animated: true)
 
-        if case PhotoCaptureError.invalidVideo = error {
+        if error is VideoCaptureFailedError {
             // Don't show an error if the user aborts recording before video
             // recording has begun.
             return
