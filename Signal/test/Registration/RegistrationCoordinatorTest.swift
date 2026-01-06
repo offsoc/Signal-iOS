@@ -26,6 +26,7 @@ public class RegistrationCoordinatorTest {
     private var experienceManager: RegistrationCoordinatorImpl.TestMocks.ExperienceManager!
     private var accountKeyStore: AccountKeyStore!
     private var localUsernameManagerMock: MockLocalUsernameManager!
+    private var mockIdentityManager: OWSIdentityManager!
     private var mockMessagePipelineSupervisor: RegistrationCoordinatorImpl.TestMocks.MessagePipelineSupervisor!
     private var mockMessageProcessor: RegistrationCoordinatorImpl.TestMocks.MessageProcessor!
     private var mockURLSession: TSRequestOWSURLSessionMock!
@@ -35,6 +36,7 @@ public class RegistrationCoordinatorTest {
     private var preKeyManagerMock: RegistrationCoordinatorImpl.TestMocks.PreKeyManager!
     private var profileManagerMock: RegistrationCoordinatorImpl.TestMocks.ProfileManager!
     private var pushRegistrationManagerMock: RegistrationCoordinatorImpl.TestMocks.PushRegistrationManager!
+    private var quickRestoreManager: QuickRestoreManager!
     private var receiptManagerMock: RegistrationCoordinatorImpl.TestMocks.ReceiptManager!
     private var registrationCoordinatorLoader: RegistrationCoordinatorLoaderImpl!
     private var registrationStateChangeManagerMock: MockRegistrationStateChangeManager!
@@ -95,6 +97,28 @@ public class RegistrationCoordinatorTest {
         usernameApiClientMock = RegistrationCoordinatorImpl.TestMocks.UsernameApiClient()
         usernameLinkManagerMock = MockUsernameLinkManager()
 
+        let recipientDbTable = RecipientDatabaseTable()
+        let recipientFetcher = RecipientFetcherImpl(
+            recipientDatabaseTable: recipientDbTable,
+            searchableNameIndexer: MockSearchableNameIndexer(),
+        )
+        let recipientIdFinder = RecipientIdFinder(
+            recipientDatabaseTable: recipientDbTable,
+            recipientFetcher: recipientFetcher
+        )
+        mockIdentityManager = MockIdentityManager(recipientIdFinder: recipientIdFinder)
+
+        quickRestoreManager = QuickRestoreManager(
+            accountKeyStore: accountKeyStore,
+            backupNonceStore: BackupNonceMetadataStore(),
+            backupSettingsStore: BackupSettingsStore(),
+            db: db,
+            deviceProvisioningService: DeviceProvisioningServiceImpl(networkManager: networkManagerMock),
+            identityManager: mockIdentityManager,
+            networkManager: networkManagerMock,
+            tsAccountManager: tsAccountManagerMock
+        )
+
         let mockURLSession = TSRequestOWSURLSessionMock()
         self.mockURLSession = mockURLSession
         let mockSignalService = OWSSignalServiceMock()
@@ -115,7 +139,7 @@ public class RegistrationCoordinatorTest {
             contactsStore: contactsStore,
             dateProvider: { self.dateProvider() },
             db: db,
-            deviceTransferService: RegistrationCoordinatorImpl.TestMocks.DeviceTransferService(),
+            deviceTransferService: DeviceTransferServiceMock(),
             experienceManager: experienceManager,
             identityManager: RegistrationCoordinatorImpl.TestMocks.IdentityManager(),
             localUsernameManager: localUsernameManagerMock,
@@ -127,7 +151,7 @@ public class RegistrationCoordinatorTest {
             preKeyManager: preKeyManagerMock,
             profileManager: profileManagerMock,
             pushRegistrationManager: pushRegistrationManagerMock,
-            quickRestoreManager: RegistrationCoordinatorImpl.TestMocks.QuickRestoreManager(),
+            quickRestoreManager: quickRestoreManager,
             receiptManager: receiptManagerMock,
             registrationBackupErrorPresenter: RegistrationCoordinatorBackupErrorPresenterMock(),
             registrationStateChangeManager: registrationStateChangeManagerMock,
@@ -1999,7 +2023,7 @@ public class RegistrationCoordinatorTest {
                     stubs.phoneNumberEntryState(
                         mode: mode,
                         previouslyEnteredE164: Stubs.e164,
-                        withValidationErrorFor: .retryAfter(retryTimeInterval)
+                        withValidationErrorFor: .retryAfter(15),
                     )
                 )
         )
@@ -2147,10 +2171,10 @@ public class RegistrationCoordinatorTest {
         // Once we get that session, we should try and send a code.
 
         // Reject with a timeout.
-        sessionManager.addRequestCodeResponseMock(.retryAfterTimeout(stubs.session(
-            receivedDate: self.date,
-            nextSMS: 10
-        )))
+        sessionManager.addRequestCodeResponseMock(.retryAfterTimeout(
+            stubs.session(receivedDate: self.date, nextSMS: 10),
+            retryAfterHeader: nil,
+        ))
 
         // Give it a phone number, which should cause it to start a session.
         // It should put us on the phone number entry screen again
@@ -2162,7 +2186,7 @@ public class RegistrationCoordinatorTest {
                     stubs.phoneNumberEntryState(
                         mode: mode,
                         previouslyEnteredE164: Stubs.e164,
-                        withValidationErrorFor: .retryAfter(10)
+                        withValidationErrorFor: .retryAfter(15),
                     )
                 )
         )
@@ -2684,32 +2708,30 @@ public class RegistrationCoordinatorTest {
         await createSessionAndRequestFirstCode(coordinator: coordinator, mode: mode)
 
         // Give back a retry response.
-        sessionManager.addSubmitCodeResponseMock(.retryAfterTimeout(stubs.session(
-            nextVerificationAttempt: 10,
-        )))
+        sessionManager.addSubmitCodeResponseMock(.retryAfterTimeout(
+            stubs.session(nextVerificationAttempt: 10),
+            retryAfterHeader: 10,
+        ))
 
         // Resend an sms code, time that out too.
-        sessionManager.addRequestCodeResponseMock(.retryAfterTimeout(stubs.session(
-            nextSMS: 7,
-            nextCall: 0,
-            nextVerificationAttempt: 9,
-        )))
+        sessionManager.addRequestCodeResponseMock(.retryAfterTimeout(
+            stubs.session(nextSMS: 7, nextCall: 0, nextVerificationAttempt: 9),
+            retryAfterHeader: 7,
+        ))
 
         // Resend an voice code, time that out too
         // Make the timeout SO short that it retries
         sessionManager.didRequestCode = false
-        sessionManager.addRequestCodeResponseMock(.retryAfterTimeout(stubs.session(
-            nextSMS: 6,
-            nextCall: 0.1,
-            nextVerificationAttempt: 8,
-        )))
+        sessionManager.addRequestCodeResponseMock(.retryAfterTimeout(
+            stubs.session(nextSMS: 6, nextCall: 0.1, nextVerificationAttempt: 8),
+            retryAfterHeader: 0.1,
+        ))
 
         // Be ready for the retry. Ensure we called it the first time.
-        sessionManager.addRequestCodeResponseMock(.retryAfterTimeout(stubs.session(
-            nextSMS: 5,
-            nextCall: 4,
-            nextVerificationAttempt: 8,
-        )))
+        sessionManager.addRequestCodeResponseMock(.retryAfterTimeout(
+            stubs.session(nextSMS: 5, nextCall: 4, nextVerificationAttempt: 8),
+            retryAfterHeader: 4,
+        ))
 
         #expect(
             await coordinator.submitVerificationCode(Stubs.verificationCode).awaitable() ==
@@ -2783,7 +2805,7 @@ public class RegistrationCoordinatorTest {
 
         // Give back a retry response when submitting a code,
         // but with no ability to resubmit.
-        sessionManager.addSubmitCodeResponseMock(.retryAfterTimeout(stubs.session()))
+        sessionManager.addSubmitCodeResponseMock(.retryAfterTimeout(stubs.session(), retryAfterHeader: nil))
 
         #expect(
             await coordinator.submitVerificationCode(Stubs.verificationCode).awaitable() ==
@@ -3496,7 +3518,7 @@ public class RegistrationCoordinatorTest {
                 validationError = .invalidE164(.init(invalidE164: previouslyEnteredE164 ?? Stubs.e164))
             case .retryAfter(let timeInterval):
                 validationError = .rateLimited(.init(
-                    expiration: date.addingTimeInterval(timeInterval),
+                    expiration: date.addingTimeInterval(timeInterval!),
                     e164: previouslyEnteredE164 ?? Stubs.e164
                 ))
             case .networkFailure, .genericError:

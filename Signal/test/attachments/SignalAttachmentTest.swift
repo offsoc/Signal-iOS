@@ -6,6 +6,7 @@
 import XCTest
 import CoreServices
 import SignalServiceKit
+import SignalUI
 import UniformTypeIdentifiers
 
 class SignalAttachmentTest: SignalBaseTest {
@@ -15,7 +16,7 @@ class SignalAttachmentTest: SignalBaseTest {
         let size = (try? DataImageSource.forPath(url.path).imageMetadata()?.pixelSize) ?? .zero
 
         let dataSource = DataSourcePath(fileUrl: url, ownership: .borrowed)
-        let attachment = try SignalAttachment.imageAttachment(
+        let attachment = try PreviewableAttachment.imageAttachment(
             dataSource: dataSource,
             dataUTI: UTType.jpeg.identifier
         )
@@ -59,7 +60,7 @@ class SignalAttachmentTest: SignalBaseTest {
             "Test is not set up correctly. Fixture doesn't have the expected chunks"
         )
 
-        let attachment = try SignalAttachment.imageAttachment(
+        let attachment = try PreviewableAttachment.imageAttachment(
             dataSource: dataSource,
             dataUTI: UTType.png.identifier
         )
@@ -97,7 +98,7 @@ class SignalAttachmentTest: SignalBaseTest {
         )
         let dataSource = try DataSourcePath(writingTempFileData: pngData, fileExtension: "png")
 
-        let attachment = try SignalAttachment.imageAttachment(
+        let attachment = try PreviewableAttachment.imageAttachment(
             dataSource: dataSource,
             dataUTI: UTType.png.identifier
         )

@@ -15,6 +15,13 @@ extension ConversationViewController {
     public func ensureBannerState() {
         AssertIsOnMainThread()
 
+        let isFirstLoadOfPinnedMessage: Bool
+        if let bannerStackView {
+            isFirstLoadOfPinnedMessage = bannerStackView.arrangedSubviews.count(where: { pinnedMessageBanner(view: $0) != nil}) == 0
+        } else {
+            isFirstLoadOfPinnedMessage = true
+        }
+
         // This method should be called rarely, so it's simplest to discard and
         // rebuild the indicator view every time.
         if let bannerStackView {
@@ -78,10 +85,27 @@ extension ConversationViewController {
         ])
         view.layoutSubviews()
 
+        if isFirstLoadOfPinnedMessage {
+            for banner in bannersView.arrangedSubviews {
+                if let pinnedMessageBanner = pinnedMessageBanner(view: banner) {
+                    pinnedMessageBanner.animateBannerFadeIn()
+                }
+            }
+        }
+
         bannerStackView = bannersView
         if hasViewDidAppearEverBegun {
             updateContentInsets()
         }
+    }
+
+    private func pinnedMessageBanner(view: UIView) -> ConversationBannerView? {
+        guard let banner = view as? ConversationBannerView,
+              let config = banner.contentView.configuration as? ConversationBannerView.ContentConfiguration,
+              config.isPinnedMessagesBanner else {
+            return nil
+        }
+        return banner
     }
 }
 
@@ -89,6 +113,15 @@ extension ConversationViewController {
 
 private class ConversationBannerView: UIView {
     internal var contentView: UIView & UIContentView
+    private var blurBackgroundView: UIVisualEffectView?
+
+    public static func fadeInAnimator() -> UIViewPropertyAnimator {
+        return UIViewPropertyAnimator(
+            duration: 0.35,
+            springDamping: 1,
+            springResponse: 0.35
+        )
+    }
 
     /// Contains all the information necessary to construct any banner.
     struct ContentConfiguration: UIContentConfiguration {
@@ -152,6 +185,7 @@ private class ConversationBannerView: UIView {
         var titleLabel = UILabel()
         var bodyLabel = UILabel()
         var thumbnail: UIImageView?
+        var isAnimating: Bool = false
 
         init(configuration: ContentConfiguration) {
             _configuration = configuration
@@ -197,17 +231,17 @@ private class ConversationBannerView: UIView {
             {
                 animatePinnedMessageTransition(
                     newTitle: title,
-                    newBody: configuration.body.string,
+                    newBody: configuration.body,
                     newThumbnail: configuration.thumbnail
                 )
             } else {
-                bodyLabel.numberOfLines = 0
+                bodyLabel.numberOfLines = configuration.isPinnedMessagesBanner ? 1 : 0
                 bodyLabel.font = UIFont.dynamicTypeSubheadlineClamped
                 bodyLabel.textColor = .Signal.label
                 bodyLabel.attributedText = configuration.body
 
                 if let title = configuration.title {
-                    titleLabel.numberOfLines = 0
+                    titleLabel.numberOfLines = configuration.isPinnedMessagesBanner ? 1 : 0
                     titleLabel.font = UIFont.dynamicTypeFootnote.semibold()
                     titleLabel.textColor = .Signal.label
                     titleLabel.text = title
@@ -296,19 +330,23 @@ private class ConversationBannerView: UIView {
             }
         }
 
-        private func animatePinnedMessageTransition(newTitle: String, newBody: String, newThumbnail: UIImageView?) {
-            func makeAnimatedStack(title: String?, body: String?, thumbnailImageView: UIImageView?) -> (UIStackView) {
+        private func animatePinnedMessageTransition(newTitle: String, newBody: NSAttributedString, newThumbnail: UIImageView?) {
+            func makeAnimatedStack(title: String?, body: NSAttributedString?, thumbnailImageView: UIImageView?) -> (UIStackView) {
                 let hStack = UIStackView()
                 hStack.axis = .horizontal
                 hStack.spacing = 12
 
                 let _titleLabel = UILabel()
+                _titleLabel.numberOfLines = 1
+                _titleLabel.font = UIFont.dynamicTypeFootnote.semibold()
+                _titleLabel.textColor = .Signal.label
                 _titleLabel.text = title
-                _titleLabel.font = titleLabel.font
 
                 let _bodyLabel = UILabel()
-                _bodyLabel.text = body
-                _bodyLabel.font = bodyLabel.font
+                _bodyLabel.numberOfLines = 1
+                _bodyLabel.font = UIFont.dynamicTypeSubheadlineClamped
+                _bodyLabel.textColor = .Signal.label
+                _bodyLabel.attributedText = body
 
                 let newTextStack = UIStackView(arrangedSubviews: [_titleLabel, _bodyLabel])
                 newTextStack.axis = .vertical
@@ -323,7 +361,7 @@ private class ConversationBannerView: UIView {
 
             let oldAnimatedStack = makeAnimatedStack(
                 title: titleLabel.text,
-                body: bodyLabel.text,
+                body: bodyLabel.attributedText,
                 thumbnailImageView: thumbnail
             )
             let newAnimatedStack = makeAnimatedStack(
@@ -370,10 +408,11 @@ private class ConversationBannerView: UIView {
             }
 
             pinAnimator.addCompletion { [self] _ in
+                self.isAnimating = false
                 fixedHeightAnimationView.removeFromSuperview()
 
                 self.titleLabel.text = newTitle
-                self.bodyLabel.text = newBody
+                self.bodyLabel.attributedText = newBody
                 self.thumbnail = newThumbnail
 
                 let textStackIndex: Int
@@ -385,6 +424,7 @@ private class ConversationBannerView: UIView {
                 }
                 insertArrangedSubview(textStackView, at: textStackIndex)
             }
+            self.isAnimating = true
             pinAnimator.startAnimation()
         }
 
@@ -444,6 +484,7 @@ private class ConversationBannerView: UIView {
 
         if let visualEffectView = backgroundView as? UIVisualEffectView {
             visualEffectView.contentView.addSubview(contentView)
+            blurBackgroundView = visualEffectView
         } else {
             addSubview(contentView)
         }
@@ -463,6 +504,55 @@ private class ConversationBannerView: UIView {
             contentView.trailingAnchor.constraint(equalTo: trailingAnchor),
             contentView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+    }
+
+    public func isAnimating() -> Bool {
+        guard let bannerContentView = contentView as? ConversationBannerContentView else {
+            return false
+        }
+        return bannerContentView.isAnimating
+    }
+
+    public func animateBannerFadeIn() {
+        guard let contentView = contentView as? ConversationBannerContentView else {
+            return
+        }
+        let animator = ConversationBannerView.fadeInAnimator()
+        UIView.performWithoutAnimation {
+            blurBackgroundView?.effect = nil
+            contentView.bodyLabel.alpha = 0
+            contentView.titleLabel.alpha = 0
+            contentView.thumbnail?.alpha = 0
+        }
+
+        animator.addAnimations {
+            if let backgroundViewEffect = self.backgroundViewVisualEffect() {
+                self.blurBackgroundView?.effect = backgroundViewEffect
+            }
+            contentView.bodyLabel.alpha = 1
+            contentView.titleLabel.alpha = 1
+            contentView.thumbnail?.alpha = 1
+        }
+
+        animator.startAnimation()
+    }
+
+    private func backgroundViewVisualEffect() -> UIVisualEffect? {
+        if #available(iOS 26, *) {
+            let glassEffect = UIGlassEffect(style: .regular)
+            glassEffect.tintColor = UIColor { traitCollection in
+                if traitCollection.userInterfaceStyle == .dark {
+                    return UIColor(white: 0, alpha: 0.2)
+                }
+                return UIColor(white: 1, alpha: 0.12)
+            }
+            return glassEffect
+        }
+
+        guard !UIAccessibility.isReduceTransparencyEnabled else { return nil }
+
+        let blurEffect = Theme.barBlurEffect
+        return blurEffect
     }
 
     required init?(coder: NSCoder) {
@@ -919,8 +1009,14 @@ internal extension ConversationViewController {
                 imageView.setCompressionResistanceHigh()
                 return imageView
             }(),
-            bannerTapAction: threadViewModel.pinnedMessages.count == 1 ? nil : { [weak self] in
-                self?.handleTappedPinnedMessage()
+            bannerTapAction: { [weak self] in
+                guard let priorPinnedMessage = self?.bannerStackView?.arrangedSubviews.last as? ConversationBannerView else {
+                    return
+                }
+
+                if !priorPinnedMessage.isAnimating() {
+                    self?.handleTappedPinnedMessage()
+                }
             },
             isPinnedMessagesBanner: true
         )

@@ -54,12 +54,11 @@ public class BackupArchiveManagerImpl: BackupArchiveManager {
     private let dateProvider: DateProvider
     private let dateProviderMonotonic: DateProviderMonotonic
     private let db: any DB
-    private let disappearingMessagesJob: OWSDisappearingMessagesJob
+    private let disappearingMessagesExpirationJob: DisappearingMessagesExpirationJob
     private let distributionListRecipientArchiver: BackupArchiveDistributionListRecipientArchiver
     private let encryptedStreamProvider: BackupArchiveEncryptedProtoStreamProvider
     private let fullTextSearchIndexer: BackupArchiveFullTextSearchIndexer
     private let groupRecipientArchiver: BackupArchiveGroupRecipientArchiver
-    private let incrementalTSAttachmentMigrator: IncrementalMessageTSAttachmentMigrator
     private let kvStore: KeyValueStore
     private let libsignalNet: LibSignalClient.Net
     private let localStorage: AccountKeyStore
@@ -96,12 +95,11 @@ public class BackupArchiveManagerImpl: BackupArchiveManager {
         dateProvider: @escaping DateProvider,
         dateProviderMonotonic: @escaping DateProviderMonotonic,
         db: any DB,
-        disappearingMessagesJob: OWSDisappearingMessagesJob,
+        disappearingMessagesExpirationJob: DisappearingMessagesExpirationJob,
         distributionListRecipientArchiver: BackupArchiveDistributionListRecipientArchiver,
         encryptedStreamProvider: BackupArchiveEncryptedProtoStreamProvider,
         fullTextSearchIndexer: BackupArchiveFullTextSearchIndexer,
         groupRecipientArchiver: BackupArchiveGroupRecipientArchiver,
-        incrementalTSAttachmentMigrator: IncrementalMessageTSAttachmentMigrator,
         libsignalNet: LibSignalClient.Net,
         localStorage: AccountKeyStore,
         localRecipientArchiver: BackupArchiveLocalRecipientArchiver,
@@ -134,12 +132,11 @@ public class BackupArchiveManagerImpl: BackupArchiveManager {
         self.dateProvider = dateProvider
         self.dateProviderMonotonic = dateProviderMonotonic
         self.db = db
-        self.disappearingMessagesJob = disappearingMessagesJob
+        self.disappearingMessagesExpirationJob = disappearingMessagesExpirationJob
         self.distributionListRecipientArchiver = distributionListRecipientArchiver
         self.encryptedStreamProvider = encryptedStreamProvider
         self.fullTextSearchIndexer = fullTextSearchIndexer
         self.groupRecipientArchiver = groupRecipientArchiver
-        self.incrementalTSAttachmentMigrator = incrementalTSAttachmentMigrator
         self.kvStore = KeyValueStore(collection: Constants.keyValueStoreCollectionName)
         self.libsignalNet = libsignalNet
         self.localStorage = localStorage
@@ -382,14 +379,9 @@ public class BackupArchiveManagerImpl: BackupArchiveManager {
             DBReadTransaction
         ) -> BackupArchive.ProtoStream.OpenOutputStreamResult<OutputStreamMetadata>
     ) async throws -> OutputStreamMetadata {
-        let migrateAttachmentsProgressSink: OWSProgressSink?
         let prepareOversizeTextAttachmentsProgressSink: OWSProgressSink?
         let exportProgress: BackupArchiveExportProgress?
         if let progressSink {
-            migrateAttachmentsProgressSink = await progressSink.addChild(
-                withLabel: "Export Backup: Migrate Attachments",
-                unitCount: 5
-            )
             prepareOversizeTextAttachmentsProgressSink = await progressSink.addChild(
                 withLabel: "Export Backup: Oversize Text Attachments",
                 unitCount: 5
@@ -397,17 +389,14 @@ public class BackupArchiveManagerImpl: BackupArchiveManager {
             exportProgress = try await .prepare(
                 sink: await progressSink.addChild(
                     withLabel: "Export Backup: Export Frames",
-                    unitCount: 90
+                    unitCount: 95
                 ),
                 db: db
             )
         } else {
-            migrateAttachmentsProgressSink = nil
             prepareOversizeTextAttachmentsProgressSink = nil
             exportProgress = nil
         }
-
-        await migrateAttachmentsBeforeBackup(progress: migrateAttachmentsProgressSink)
 
         try await oversizeTextArchiver.populateTableIncrementally(progress: prepareOversizeTextAttachmentsProgressSink)
 
@@ -847,19 +836,14 @@ public class BackupArchiveManagerImpl: BackupArchiveManager {
             DBReadTransaction
         ) -> BackupArchive.ProtoStream.OpenInputStreamResult
     ) async throws {
-        let migrateAttachmentsProgressSink: OWSProgressSink?
         let frameRestoreProgress: BackupArchiveImportFramesProgress?
         let recreateIndexesProgress: BackupArchiveImportRecreateIndexesProgress?
         let finalizeProgress: OWSProgressSink?
         if let progressSink {
-            migrateAttachmentsProgressSink = await progressSink.addChild(
-                withLabel: "Import Backup: Migrate Attachments",
-                unitCount: 5
-            )
             frameRestoreProgress = try await .prepare(
                 sink: await progressSink.addChild(
                     withLabel: "Import Backup: Import Frames",
-                    unitCount: 78
+                    unitCount: 83
                 ),
                 fileUrl: fileUrl
             )
@@ -874,13 +858,10 @@ public class BackupArchiveManagerImpl: BackupArchiveManager {
                 unitCount: 5
             )
         } else {
-            migrateAttachmentsProgressSink = nil
             frameRestoreProgress = nil
             recreateIndexesProgress = nil
             finalizeProgress = nil
         }
-
-        await migrateAttachmentsBeforeBackup(progress: migrateAttachmentsProgressSink)
 
         let backupInfo = try await db.awaitableWriteWithRollbackIfThrows { tx in
             return try BenchMemory(
@@ -1350,11 +1331,7 @@ public class BackupArchiveManagerImpl: BackupArchiveManager {
                 tx: tx,
             )
 
-            tx.addSyncCompletion { [
-                avatarFetcher,
-                backupAttachmentCoordinator,
-                disappearingMessagesJob
-            ] in
+            tx.addSyncCompletion { [self] in
                 Task {
                     // Kick off avatar fetches enqueued during restore.
                     try await avatarFetcher.runIfNeeded()
@@ -1365,8 +1342,9 @@ public class BackupArchiveManagerImpl: BackupArchiveManager {
                     try await backupAttachmentCoordinator.restoreAttachmentsIfNeeded()
                 }
 
-                // Start ticking down for disappearing messages.
-                disappearingMessagesJob.startIfNecessary()
+                // We may have inserted disappearing messages, so we need to let
+                // the expiration job know.
+                disappearingMessagesExpirationJob.restart()
             }
 
             logger.info("Imported with version \(backupInfo.version), timestamp \(backupInfo.backupTimeMs)")
@@ -1466,27 +1444,6 @@ public class BackupArchiveManagerImpl: BackupArchiveManager {
                 }
             }
 
-        }
-    }
-
-    /// TSAttachments must be migrated to v2 Attachments before we can create or restore backups.
-    /// Normally this migration happens in the background; force it to run and finish now.
-    private func migrateAttachmentsBeforeBackup(progress: OWSProgressSink?) async {
-        let didMigrateAnything = await incrementalTSAttachmentMigrator.runInMainAppUntilFinished(
-            ignorePastFailures: true,
-            progress: progress
-        )
-
-        if
-            let progress,
-            !didMigrateAnything
-        {
-            // Nothing was migrated, so progress wasn't updated. Complete it!
-            let source = await progress.addSource(
-                withLabel: "TSAttachmentMigrator had nothing to do",
-                unitCount: 1
-            )
-            source.complete()
         }
     }
 

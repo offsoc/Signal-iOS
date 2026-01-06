@@ -12,7 +12,7 @@ import Contacts
 import CoreLocation
 import CoreServices
 public import MapKit
-public import SignalServiceKit
+import SignalServiceKit
 import SignalUI
 import UniformTypeIdentifiers
 
@@ -94,22 +94,6 @@ public class LocationPicker: UIViewController {
             "LOCATION_PICKER_SEARCH_PLACEHOLDER",
             comment: "A string indicating that the user can search for a location"
         )
-
-        if #unavailable(iOS 26) {
-            OWSSearchBar.applyTheme(to: searchBar)
-            searchBar.isTranslucent = true
-
-            // When the search bar isn't translucent, it doesn't allow
-            // setting the textField's backgroundColor. Instead, we need
-            // to use the background image.
-            let backgroundImage = UIImage.image(
-                color: Theme.searchFieldBackgroundColor,
-                size: CGSize(square: 36)
-            ).withCornerRadius(10)
-            searchBar.setSearchFieldBackgroundImage(backgroundImage, for: .normal)
-            searchBar.searchTextPositionAdjustment = UIOffset(horizontal: 8.0, vertical: 0.0)
-            searchBar.textField?.backgroundColor = .clear
-        }
 
         navigationItem.searchController = searchController
         definesPresentationContext = true
@@ -475,14 +459,14 @@ public class Location: NSObject {
         self.placemark = placemark
     }
 
-    public func prepareAttachment() async throws -> SendableAttachment {
+    func prepareAttachment() async throws -> SendableAttachment {
         let image = try await generateSnapshot()
         guard let jpegData = image.jpegData(compressionQuality: 1.0) else {
             throw LocationError.assertion
         }
         let dataSource = try DataSourcePath(writingTempFileData: jpegData, fileExtension: "jpg")
         return try await SendableAttachment.forPreviewableAttachment(
-            PreviewableAttachment(rawValue: SignalAttachment.imageAttachment(dataSource: dataSource, dataUTI: UTType.jpeg.identifier)),
+            PreviewableAttachment.imageAttachment(dataSource: dataSource, dataUTI: UTType.jpeg.identifier),
             imageQualityLevel: .one,
         )
     }

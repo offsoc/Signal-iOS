@@ -139,7 +139,7 @@ class GifPickerViewController: OWSViewController, UISearchBarDelegate, UICollect
     // MARK: Initializers
 
     override init() {
-        self.searchBar = OWSSearchBar()
+        self.searchBar = UISearchBar()
         self.layout = GifPickerLayout()
         self.collectionView = UICollectionView(frame: CGRect.zero, collectionViewLayout: self.layout)
 
@@ -512,9 +512,9 @@ class GifPickerViewController: OWSViewController, UISearchBarDelegate, UICollect
         try FileManager.default.copyItem(atPath: assetFilePath, toPath: consumableFilePath)
         let dataSource = DataSourcePath(filePath: consumableFilePath, ownership: .owned)
 
-        let attachment = try SignalAttachment.attachment(dataSource: dataSource, dataUTI: assetTypeIdentifier)
-        attachment.isLoopingVideo = attachment.isVideo
-        return PreviewableAttachment(rawValue: attachment)
+        let attachment = try PreviewableAttachment.buildAttachment(dataSource: dataSource, dataUTI: assetTypeIdentifier)
+        attachment.rawValue.isLoopingVideo = attachment.isVideo
+        return attachment
     }
 
     public func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {

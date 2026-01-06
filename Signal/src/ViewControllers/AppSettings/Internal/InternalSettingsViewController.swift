@@ -82,7 +82,7 @@ class InternalSettingsViewController: OWSTableViewController2 {
                 guard let self = self else {
                     return
                 }
-                SignalApp.showExportDatabaseUI(from: self)
+                SignalApp.shared.showExportDatabaseUI(from: self)
             }
         ))
         debugSection.add(.actionItem(
@@ -98,7 +98,10 @@ class InternalSettingsViewController: OWSTableViewController2 {
                 guard let self = self else {
                     return
                 }
-                SignalApp.showDatabaseIntegrityCheckUI(from: self, databaseStorage: SSKEnvironment.shared.databaseStorageRef)
+                SignalApp.shared.showDatabaseIntegrityCheckUI(
+                    from: self,
+                    databaseStorage: SSKEnvironment.shared.databaseStorageRef,
+                )
             }
         ))
         debugSection.add(.actionItem(
@@ -314,6 +317,9 @@ class InternalSettingsViewController: OWSTableViewController2 {
             isOn: { SpinningCheckmarks.shouldSpin },
             target: self,
             selector: #selector(spinCheckmarks(_:))))
+        otherSection.add(.disclosureItem(withText: "Show Call Quality Survey") { [weak self] in
+            self?.present(CallQualitySurveyNavigationController(), animated: true)
+        })
         contents.add(otherSection)
 
         if mode != .registration {

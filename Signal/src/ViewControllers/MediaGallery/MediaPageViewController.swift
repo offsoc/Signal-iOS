@@ -102,6 +102,10 @@ class MediaPageViewController: UIPageViewController {
     // MARK: UIViewController
 
     override var preferredStatusBarStyle: UIStatusBarStyle {
+        guard #unavailable(iOS 26) else {
+            return super.preferredStatusBarStyle
+        }
+
         if Theme.isDarkThemeEnabled {
             return .lightContent
         }
@@ -132,7 +136,10 @@ class MediaPageViewController: UIPageViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        overrideUserInterfaceStyle = .dark
+        if #unavailable(iOS 26) {
+            overrideUserInterfaceStyle = .dark
+        }
+
         view.backgroundColor = .Signal.background
 
         mediaInteractiveDismiss.addGestureRecognizer(to: view)
@@ -329,6 +336,18 @@ class MediaPageViewController: UIPageViewController {
     private func showOrHideTopAndBottomPanelsAsNecessary(animated: Bool) {
         topPanel.setIsHidden(shouldHideToolbars, animated: animated)
         bottomMediaPanel.setIsHidden(shouldHideToolbars || bottomMediaPanel.shouldBeHidden, animated: animated)
+        if #available(iOS 26, *) {
+            let targetColor = shouldHideToolbars ? UIColor.black : UIColor.Signal.background
+            if animated {
+                let animator = UIViewPropertyAnimator(duration: 0.2, curve: .easeInOut)
+                animator.addAnimations {
+                    self.view.backgroundColor = targetColor
+                }
+                animator.startAnimation()
+            } else {
+                view.backgroundColor = targetColor
+            }
+        }
     }
 
     private var shouldHideStatusBar: Bool {
@@ -877,6 +896,7 @@ extension MediaPageViewController: MediaControlPanelDelegate {
 }
 
 extension MediaPageViewController: MediaPresentationContextProvider {
+
     func mediaPresentationContext(item: Media, in coordinateSpace: UICoordinateSpace) -> MediaPresentationContext? {
         guard let mediaView = currentViewController?.mediaView else { return nil }
 
@@ -885,28 +905,30 @@ extension MediaPageViewController: MediaPresentationContextProvider {
             return nil
         }
 
+        view.layoutIfNeeded()
+
+        let backgroundColor: UIColor = if #available(iOS 26, *) { .Signal.background } else { .black }
         return MediaPresentationContext(
             mediaView: mediaView,
-            presentationFrame: mediaView.frame
+            presentationFrame: mediaView.frame,
+            backgroundColor: backgroundColor
         )
     }
 
-    func snapshotOverlayView(in coordinateSpace: UICoordinateSpace) -> (UIView, CGRect)? {
-        guard !shouldHideToolbars else { return nil }
-        guard let snapshotView = view.snapshotView(afterScreenUpdates: true) else { return nil }
+    func mediaWillPresent(toContext: MediaPresentationContext) {
+        view.backgroundColor = .clear
+    }
 
-        // Apply masking to only show top and bottom panels.
-        let maskLayer = CAShapeLayer()
-        maskLayer.frame = snapshotView.layer.bounds
-        let path = UIBezierPath()
-        path.append(UIBezierPath(rect: topPanel.frame))
-        path.append(UIBezierPath(rect: bottomMediaPanel.frame))
-        maskLayer.path = path.cgPath
-        snapshotView.layer.mask = maskLayer
+    func mediaDidPresent(toContext: MediaPresentationContext) {
+        view.backgroundColor = .Signal.background
+    }
 
-        let presentationFrame = coordinateSpace.convert(snapshotView.frame, from: view.superview!)
+    func mediaWillDismiss(fromContext: MediaPresentationContext) {
+        view.backgroundColor = .clear
+    }
 
-        return (snapshotView, presentationFrame)
+    func mediaDidDismiss(fromContext: MediaPresentationContext) {
+        view.backgroundColor = .Signal.background
     }
 }
 

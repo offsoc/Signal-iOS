@@ -27,9 +27,12 @@ public extension ConversationViewController {
         }
 
         let currentPin = threadViewModel.pinnedMessages[pinnedMessageIndex]
-        pinnedMessageIndex = (pinnedMessageIndex + 1) % threadViewModel.pinnedMessages.count
 
-        animateToNextPinnedMessage()
+        if threadViewModel.pinnedMessages.count > 1 {
+            pinnedMessageIndex = (pinnedMessageIndex + 1) % threadViewModel.pinnedMessages.count
+            animateToNextPinnedMessage()
+        }
+
         ensureInteractionLoadedThenScrollToInteraction(
             currentPin.uniqueId,
             alignment: .centerIfNotEntirelyOnScreen,
@@ -308,5 +311,9 @@ extension ConversationViewController: PinnedMessageInteractionManagerDelegate {
             alignment: .centerIfNotEntirelyOnScreen,
             isAnimated: true
         )
+    }
+
+    func unpinMessage(message: TSMessage) {
+        handleActionUnpin(message: message)
     }
 }

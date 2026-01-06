@@ -10,6 +10,7 @@ import SignalUI
 @objc
 protocol PinnedMessageInteractionManagerDelegate: AnyObject {
     func goToMessage(message: TSMessage)
+    func unpinMessage(message: TSMessage)
 }
 
 class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDelegate, PinnedMessageLongPressDelegate.ActionDelegate {
@@ -36,6 +37,8 @@ class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDele
         self.pinnedMessageManager = pinnedMessageManager
 
         super.init()
+
+        view.backgroundColor = .Signal.groupedBackground
 
         databaseChangeObserver.appendDatabaseChangeDelegate(self)
 
@@ -276,6 +279,12 @@ class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDele
     func deleteMessage(itemViewModel: CVItemViewModelImpl) {
         itemViewModel.interaction.presentDeletionActionSheet(from: self)
     }
+
+    func unpinMessage(itemViewModel: CVItemViewModelImpl) {
+        dismiss(animated: true)
+        guard let message = itemViewModel.interaction as? TSMessage else { return }
+        delegate?.unpinMessage(message: message)
+    }
 }
 
 // MARK: - UIContextMenuInteractionDelegate
@@ -283,6 +292,7 @@ class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDele
 private class PinnedMessageLongPressDelegate: NSObject, UIContextMenuInteractionDelegate {
     fileprivate protocol ActionDelegate: AnyObject {
         func deleteMessage(itemViewModel: CVItemViewModelImpl)
+        func unpinMessage(itemViewModel: CVItemViewModelImpl)
     }
 
     let itemViewModel: CVItemViewModelImpl
@@ -337,8 +347,9 @@ private class PinnedMessageLongPressDelegate: NSObject, UIContextMenuInteraction
                             comment: "Action menu item to unpin a message"
                         ),
                         image: .pinSlash
-                    ) { _ in
-                        // TODO: implement!
+                    ) { [weak self] _ in
+                        guard let self = self else { return }
+                        actionDelegate?.unpinMessage(itemViewModel: itemViewModel)
                     },
                     UIAction(
                         title: OWSLocalizedString(
