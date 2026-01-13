@@ -22,7 +22,7 @@ public class UnpreparedOutgoingMessage {
         quotedReplyDraft: DraftQuotedReplyModel.ForSending? = nil,
         messageStickerDraft: MessageStickerDataSource? = nil,
         contactShareDraft: ContactShareDraft.ForSending? = nil,
-        poll: CreatePollMessage? = nil
+        poll: CreatePollMessage? = nil,
     ) -> UnpreparedOutgoingMessage {
         let oversizeTextDataSource = (body?.oversizeText).map {
             AttachmentDataSource.pendingAttachment($0)
@@ -30,11 +30,11 @@ public class UnpreparedOutgoingMessage {
         if !message.shouldBeSaved {
             owsAssertDebug(
                 unsavedBodyMediaAttachments.isEmpty
-                && oversizeTextDataSource == nil
-                && linkPreviewDraft != nil
-                && quotedReplyDraft != nil
-                && messageStickerDraft != nil,
-                "Unknown unsaved message sent through saved path with attachments!"
+                    && oversizeTextDataSource == nil
+                    && linkPreviewDraft != nil
+                    && quotedReplyDraft != nil
+                    && messageStickerDraft != nil,
+                "Unknown unsaved message sent through saved path with attachments!",
             )
             Self.assertIsAllowedTransientMessage(message)
             return .init(messageType: .transient(message))
@@ -47,7 +47,7 @@ public class UnpreparedOutgoingMessage {
                 quotedReplyDraft: quotedReplyDraft,
                 messageStickerDraft: messageStickerDraft,
                 contactShareDraft: contactShareDraft,
-                poll: poll
+                poll: poll,
             )))
         }
     }
@@ -57,24 +57,24 @@ public class UnpreparedOutgoingMessage {
         edits: MessageEdits,
         oversizeTextDataSource: AttachmentDataSource?,
         linkPreviewDraft: LinkPreviewDataSource?,
-        quotedReplyEdit: MessageEdits.Edit<Void>
+        quotedReplyEdit: MessageEdits.Edit<Void>,
     ) -> UnpreparedOutgoingMessage {
         return .init(messageType: .editMessage(.init(
             targetMessage: targetMessage,
             edits: edits,
             oversizeTextDataSource: oversizeTextDataSource,
             linkPreviewDraft: linkPreviewDraft,
-            quotedReplyEdit: quotedReplyEdit
+            quotedReplyEdit: quotedReplyEdit,
         )))
     }
 
     public static func forOutgoingStoryMessage(
         _ message: OutgoingStoryMessage,
-        storyMessageRowId: Int64
+        storyMessageRowId: Int64,
     ) -> UnpreparedOutgoingMessage {
         return .init(messageType: .story(.init(
             message: message,
-            storyMessageRowId: storyMessageRowId
+            storyMessageRowId: storyMessageRowId,
         )))
     }
 
@@ -83,7 +83,7 @@ public class UnpreparedOutgoingMessage {
     /// "Prepares" the outgoing message, inserting it into the database if needed and
     /// returning a ``PreparedOutgoingMessage`` ready to be sent.
     public func prepare(
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) throws -> PreparedOutgoingMessage {
         return try self._prepare(tx: tx)
     }
@@ -94,7 +94,7 @@ public class UnpreparedOutgoingMessage {
             return message.message.timestamp
         case .editMessage(let message):
             return message.edits.timestamp.unwrapChange(
-                orKeepValue: message.targetMessage.timestamp
+                orKeepValue: message.targetMessage.timestamp,
             )
         case .story(let story):
             return story.message.timestamp
@@ -155,7 +155,7 @@ public class UnpreparedOutgoingMessage {
     }
 
     public func _prepare(
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) throws -> PreparedOutgoingMessage {
         let preparedMessageType: PreparedOutgoingMessage.MessageType
         switch messageType {
@@ -180,8 +180,8 @@ public class UnpreparedOutgoingMessage {
         return PreparedOutgoingMessage(builder)
     }
 
-    internal struct PreparedMessageBuilder {
-        internal let messageType: PreparedOutgoingMessage.MessageType
+    struct PreparedMessageBuilder {
+        let messageType: PreparedOutgoingMessage.MessageType
 
         // Only this class can have access to this initializer, which in
         // turns means only this class can create a PreparedOutgoingMessage
@@ -192,8 +192,14 @@ public class UnpreparedOutgoingMessage {
 
     private func preparePersistableMessage(
         _ message: MessageType.Persistable,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) throws -> PreparedOutgoingMessage.MessageType {
+        let attachmentManager = DependenciesBridge.shared.attachmentManager
+        let contactShareManager = DependenciesBridge.shared.contactShareManager
+        let linkPreviewManager = DependenciesBridge.shared.linkPreviewManager
+        let messageStickerManager = DependenciesBridge.shared.messageStickerManager
+        let quotedReplyManager = DependenciesBridge.shared.quotedReplyManager
+
         guard
             let thread = message.message.thread(tx: tx),
             let threadRowId = thread.sqliteRowId
@@ -201,41 +207,32 @@ public class UnpreparedOutgoingMessage {
             throw OWSAssertionError("Outgoing message missing thread.")
         }
 
-        let linkPreviewBuilder = try message.linkPreviewDraft.map {
-            try DependenciesBridge.shared.linkPreviewManager.buildLinkPreview(
-                from: $0,
-                tx: tx
-            )
-        }.map {
-            message.message.update(with: $0.info, transaction: tx)
-            return $0
+        let validatedLinkPreview = try message.linkPreviewDraft.map {
+            return try linkPreviewManager.validateDataSource(dataSource: $0, tx: tx)
+        }
+        if let validatedLinkPreview {
+            message.message.update(with: validatedLinkPreview.preview, transaction: tx)
         }
 
-        let quotedReplyBuilder = message.quotedReplyDraft.map {
-            DependenciesBridge.shared.quotedReplyManager.buildQuotedReplyForSending(
-                draft: $0,
-                tx: tx
-            )
-        }.map {
-            message.message.update(with: $0.info, transaction: tx)
-            return $0
+        let validatedQuotedReply = message.quotedReplyDraft.map {
+            return quotedReplyManager.prepareQuotedReplyForSending(draft: $0, tx: tx)
+        }
+        if let validatedQuotedReply {
+            message.message.update(with: validatedQuotedReply.quotedReply, transaction: tx)
         }
 
-        let messageStickerBuilder = try message.messageStickerDraft.map {
-            try DependenciesBridge.shared.messageStickerManager.buildValidatedMessageSticker(from: $0, tx: tx)
-        }.map {
-            message.message.update(with: $0.info, transaction: tx)
-            return $0
+        let validatedMessageSticker = try message.messageStickerDraft.map {
+            return try messageStickerManager.validateMessageSticker(dataSource: $0)
+        }
+        if let validatedMessageSticker {
+            message.message.update(with: validatedMessageSticker.sticker, transaction: tx)
         }
 
-        let contactShareBuilder = try message.contactShareDraft.map {
-            try DependenciesBridge.shared.contactShareManager.build(
-                draft: $0,
-                tx: tx
-            )
-        }.map {
-            message.message.update(withContactShare: $0.info, transaction: tx)
-            return $0
+        let validatedContactShare = message.contactShareDraft.map {
+            contactShareManager.validateAndBuild(preparedDraft: $0)
+        }
+        if let validatedContactShare {
+            message.message.update(withContactShare: validatedContactShare.contact, transaction: tx)
         }
 
         if message.poll != nil {
@@ -253,104 +250,122 @@ public class UnpreparedOutgoingMessage {
                 interactionId: messageRowId,
                 pollOptions: poll.options,
                 allowsMultiSelect: poll.allowMultiple,
-                transaction: tx
+                transaction: tx,
             )
         }
 
         if let oversizeTextDataSource = message.oversizeTextDataSource {
             try DependenciesBridge.shared.attachmentManager.createAttachmentStream(
-                consuming: .init(
+                from: OwnedAttachmentDataSource(
                     dataSource: oversizeTextDataSource,
                     owner: .messageOversizeText(.init(
                         messageRowId: messageRowId,
                         receivedAtTimestamp: message.message.receivedAtTimestamp,
                         threadRowId: threadRowId,
-                        isPastEditRevision: message.message.isPastEditRevision()
-                    ))
+                        isPastEditRevision: message.message.isPastEditRevision(),
+                    )),
                 ),
-                tx: tx
+                tx: tx,
             )
         }
-        if message.unsavedBodyMediaAttachments.count > 0 {
+
+        for (idx, var unsavedBodyMediaAttachment) in message.unsavedBodyMediaAttachments.enumerated() {
             // Borderless is disallowed on any message with a quoted reply.
-            let unsavedBodyMediaAttachments: [AttachmentDataSource]
-            if quotedReplyBuilder != nil {
-                unsavedBodyMediaAttachments = message.unsavedBodyMediaAttachments.map {
-                    return $0.removeBorderlessRenderingFlagIfPresent()
-                }
-            } else {
-                unsavedBodyMediaAttachments = message.unsavedBodyMediaAttachments
+            if validatedQuotedReply != nil {
+                unsavedBodyMediaAttachment = unsavedBodyMediaAttachment.removeBorderlessRenderingFlagIfPresent()
             }
-            try DependenciesBridge.shared.attachmentManager.createAttachmentStreams(
-                consuming: unsavedBodyMediaAttachments.map { dataSource in
-                    return .init(
-                        dataSource: dataSource,
-                        owner: .messageBodyAttachment(.init(
-                            messageRowId: messageRowId,
-                            receivedAtTimestamp: message.message.receivedAtTimestamp,
-                            threadRowId: threadRowId,
-                            isViewOnce: message.message.isViewOnceMessage,
-                            isPastEditRevision: message.message.isPastEditRevision()
-                        ))
-                    )
-                },
-                tx: tx
+
+            let attachmentManager = DependenciesBridge.shared.attachmentManager
+            try attachmentManager.createAttachmentStream(
+                from: OwnedAttachmentDataSource(
+                    dataSource: unsavedBodyMediaAttachment,
+                    owner: .messageBodyAttachment(.init(
+                        messageRowId: messageRowId,
+                        receivedAtTimestamp: message.message.receivedAtTimestamp,
+                        threadRowId: threadRowId,
+                        isViewOnce: message.message.isViewOnceMessage,
+                        isPastEditRevision: message.message.isPastEditRevision(),
+                        orderInMessage: UInt32(idx),
+                    )),
+                ),
+                tx: tx,
             )
         }
 
-        try linkPreviewBuilder?.finalize(
-            owner: .messageLinkPreview(.init(
-                messageRowId: messageRowId,
-                receivedAtTimestamp: message.message.receivedAtTimestamp,
-                threadRowId: threadRowId,
-                isPastEditRevision: message.message.isPastEditRevision()
-            )),
-            tx: tx
-        )
-        try quotedReplyBuilder?.finalize(
-            owner: .quotedReplyAttachment(.init(
-                messageRowId: messageRowId,
-                receivedAtTimestamp: message.message.receivedAtTimestamp,
-                threadRowId: threadRowId,
-                isPastEditRevision: message.message.isPastEditRevision()
-            )),
-            tx: tx
-        )
+        if let linkPreviewImageDataSource = validatedLinkPreview?.imageDataSource {
+            try attachmentManager.createAttachmentStream(
+                from: OwnedAttachmentDataSource(
+                    dataSource: linkPreviewImageDataSource,
+                    owner: .messageLinkPreview(.init(
+                        messageRowId: messageRowId,
+                        receivedAtTimestamp: message.message.receivedAtTimestamp,
+                        threadRowId: threadRowId,
+                        isPastEditRevision: message.message.isPastEditRevision(),
+                    )),
+                ),
+                tx: tx,
+            )
+        }
 
-        try messageStickerBuilder.map {
-            try $0.finalize(
-                owner: .messageSticker(.init(
+        if let thumbnailDataSource = validatedQuotedReply?.thumbnailDataSource {
+            try attachmentManager.createQuotedReplyMessageThumbnail(
+                from: thumbnailDataSource,
+                owningMessageAttachmentBuilder: .init(
                     messageRowId: messageRowId,
                     receivedAtTimestamp: message.message.receivedAtTimestamp,
                     threadRowId: threadRowId,
                     isPastEditRevision: message.message.isPastEditRevision(),
-                    stickerPackId: $0.info.packId,
-                    stickerId: $0.info.stickerId
-                )),
-                tx: tx
+                ),
+                tx: tx,
             )
-            StickerManager.stickerWasSent($0.info.info, transaction: tx)
         }
 
-        try? contactShareBuilder?.finalize(
-            owner: .messageContactAvatar(.init(
-                messageRowId: messageRowId,
-                receivedAtTimestamp: message.message.receivedAtTimestamp,
-                threadRowId: threadRowId,
-                isPastEditRevision: message.message.isPastEditRevision()
-            )),
-            tx: tx
-        )
+        if let validatedMessageSticker {
+            try attachmentManager.createAttachmentStream(
+                from: OwnedAttachmentDataSource(
+                    dataSource: validatedMessageSticker.attachmentDataSource,
+                    owner: .messageSticker(.init(
+                        messageRowId: messageRowId,
+                        receivedAtTimestamp: message.message.receivedAtTimestamp,
+                        threadRowId: threadRowId,
+                        isPastEditRevision: message.message.isPastEditRevision(),
+                        stickerPackId: validatedMessageSticker.sticker.packId,
+                        stickerId: validatedMessageSticker.sticker.stickerId,
+                    )),
+                ),
+                tx: tx,
+            )
+
+            StickerManager.stickerWasSent(
+                validatedMessageSticker.sticker.info,
+                transaction: tx,
+            )
+        }
+
+        if let avatarDataSource = validatedContactShare?.avatarDataSource {
+            try attachmentManager.createAttachmentStream(
+                from: OwnedAttachmentDataSource(
+                    dataSource: avatarDataSource,
+                    owner: .messageContactAvatar(.init(
+                        messageRowId: messageRowId,
+                        receivedAtTimestamp: message.message.receivedAtTimestamp,
+                        threadRowId: threadRowId,
+                        isPastEditRevision: message.message.isPastEditRevision(),
+                    )),
+                ),
+                tx: tx,
+            )
+        }
 
         return .persisted(PreparedOutgoingMessage.MessageType.Persisted(
             rowId: messageRowId,
-            message: message.message
+            message: message.message,
         ))
     }
 
     private func prepareEditMessage(
         _ message: MessageType.EditMessage,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) throws -> PreparedOutgoingMessage.MessageType {
         guard let thread = message.targetMessage.thread(tx: tx) else {
             throw OWSAssertionError("Outgoing message missing thread.")
@@ -363,46 +378,49 @@ public class UnpreparedOutgoingMessage {
             oversizeText: message.oversizeTextDataSource,
             quotedReplyEdit: message.quotedReplyEdit,
             linkPreview: message.linkPreviewDraft,
-            tx: tx
+            tx: tx,
         )
 
         // All editable messages, by definition, should have been inserted.
         // Fail if we have no row id.
-        guard let editedMessageRowId = outgoingEditMessage.editedMessage.sqliteRowId else {
+        guard
+            let editedMessage = outgoingEditMessage.editedMessage,
+            let editedMessageRowId = editedMessage.sqliteRowId
+        else {
             // We failed to insert!
             throw OWSAssertionError("Failed to insert message!")
         }
 
         return .editMessage(.init(
             editedMessageRowId: editedMessageRowId,
-            editedMessage: outgoingEditMessage.editedMessage,
-            messageForSending: outgoingEditMessage
+            editedMessage: editedMessage,
+            messageForSending: outgoingEditMessage,
         ))
     }
 
     private func prepareStoryMessage(
-        _ story: MessageType.Story
+        _ story: MessageType.Story,
     ) -> PreparedOutgoingMessage.MessageType {
         return .story(PreparedOutgoingMessage.MessageType.Story(
-            message: story.message
+            message: story.message,
         ))
     }
 
     private func prepareTransientMessage(
-        _ message: TSOutgoingMessage
+        _ message: TSOutgoingMessage,
     ) -> PreparedOutgoingMessage.MessageType {
         return .transient(message)
     }
 
     // MARK: - Helpers
 
-    internal static func assertIsAllowedTransientMessage(_ message: TSOutgoingMessage) {
+    static func assertIsAllowedTransientMessage(_ message: TSOutgoingMessage) {
         owsAssertDebug(
             !message.shouldBeSaved
-            && !(message is OWSSyncContactsMessage)
-            && !(message is OutgoingStoryMessage)
-            && !(message is OutgoingEditMessage),
-            "Disallowed transient message; use type-specific initializers instead"
+                && !(message is OWSSyncContactsMessage)
+                && !(message is OutgoingStoryMessage)
+                && !(message is OutgoingEditMessage),
+            "Disallowed transient message; use type-specific initializers instead",
         )
     }
 }

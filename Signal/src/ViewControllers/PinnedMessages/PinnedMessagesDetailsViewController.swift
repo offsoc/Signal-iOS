@@ -7,12 +7,6 @@ import LibSignalClient
 import SignalServiceKit
 import SignalUI
 
-@objc
-protocol PinnedMessageInteractionManagerDelegate: AnyObject {
-    func goToMessage(message: TSMessage)
-    func unpinMessage(message: TSMessage)
-}
-
 class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDelegate, PinnedMessageLongPressDelegate.ActionDelegate {
     private var pinnedMessages: [TSMessage]
     private let threadViewModel: ThreadViewModel
@@ -28,7 +22,7 @@ class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDele
         database: DB,
         delegate: PinnedMessageInteractionManagerDelegate,
         databaseChangeObserver: DatabaseChangeObserver,
-        pinnedMessageManager: PinnedMessageManager
+        pinnedMessageManager: PinnedMessageManager,
     ) {
         self.pinnedMessages = pinnedMessages
         self.threadViewModel = threadViewModel
@@ -45,7 +39,7 @@ class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDele
         let titleLabel = UILabel()
         titleLabel.text = OWSLocalizedString(
             "PINNED_MESSAGES_DETAILS_TITLE",
-            comment: "Title for Pinned Messages detail view"
+            comment: "Title for Pinned Messages detail view",
         )
         titleLabel.font = .dynamicTypeHeadlineClamped.semibold()
         titleLabel.textColor = UIColor.Signal.label
@@ -63,6 +57,7 @@ class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDele
         titleStackView.spacing = 4
 
         navigationItem.titleView = titleStackView
+        navigationItem.rightBarButtonItem = .doneButton(dismissingFrom: self)
     }
 
     private func layoutPinnedMessages(tx: DBReadTransaction) {
@@ -93,13 +88,11 @@ class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDele
             if daysPrior != currentDaysBefore {
                 currentDaysBefore = daysPrior
                 let dateInteraction = DateHeaderInteraction(thread: threadViewModel.threadRecord, timestamp: message.timestamp)
-                if let dateItem = buildDateRenderItem(dateInteraction: dateInteraction, tx: tx)
-                {
+                if let dateItem = buildDateRenderItem(dateInteraction: dateInteraction, tx: tx) {
                     let cellView = CVCellView()
                     cellView.configure(renderItem: dateItem, componentDelegate: self)
                     cellView.isCellVisible = true
                     cellView.autoSetDimension(.height, toSize: dateItem.cellSize.height)
-
                     stack.addArrangedSubview(cellView)
                 }
             }
@@ -107,8 +100,8 @@ class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDele
                 buildButtonAndCellStack(
                     renderItem: renderItem,
                     message: message,
-                    reversedIndex: index
-                )
+                    reversedIndex: index,
+                ),
             )
         }
 
@@ -116,11 +109,30 @@ class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDele
         scrollView.addSubview(paddedContainerView)
         view.addSubview(scrollView)
 
-        scrollView.autoPinEdgesToSuperviewEdges()
+        scrollView.autoPinEdgesToSuperviewSafeArea()
         paddedContainerView.autoPinEdgesToSuperviewEdges()
-        stack.autoPinEdgesToSuperviewEdges(with: UIEdgeInsets(top: 16, left: 16, bottom: 16, right: 16))
+
+        stack.autoPinEdgesToSuperviewEdges(with: UIEdgeInsets(top: 16, left: 16, bottom: 64, right: 16))
         paddedContainerView.autoMatch(.width, to: .width, of: scrollView)
 
+        if BuildFlags.PinnedMessages.send {
+            let unpinAllButton = UIButton(
+                configuration: .largeSecondary(title: OWSLocalizedString(
+                    "PINNED_MESSAGES_UNPIN_ALL",
+                    comment: "Title for a button to unpin all pinned messages.",
+                )),
+                primaryAction: UIAction { [weak self] _ in
+                    self?.dismiss(animated: true)
+                    self?.delegate?.unpinAllMessages()
+                },
+            )
+            view.addSubview(unpinAllButton)
+            unpinAllButton.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                unpinAllButton.bottomAnchor.constraint(equalTo: contentLayoutGuide.bottomAnchor),
+                unpinAllButton.centerXAnchor.constraint(equalTo: contentLayoutGuide.centerXAnchor),
+            ])
+        }
     }
 
     private func updatePinnedMessageState() {
@@ -164,9 +176,13 @@ class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDele
         cellView.isCellVisible = true
         cellView.autoSetDimension(.height, toSize: renderItem.cellSize.height)
         cellView.autoSetDimension(.width, toSize: renderItem.cellSize.width)
-
         let uiContextMenuInteraction = UIContextMenuInteraction(delegate: messageLongPressDelegates[reversedIndex])
         cellView.addInteraction(uiContextMenuInteraction)
+
+        if let contentMenuContextView = cellView.componentView?.contextMenuContentView?() {
+            let uiContextMenuInteraction = UIContextMenuInteraction(delegate: messageLongPressDelegates[reversedIndex])
+            contentMenuContextView.addInteraction(uiContextMenuInteraction)
+        }
 
         let spacer = UIView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -197,8 +213,9 @@ class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDele
             isWallpaperPhoto: false,
             chatColor: DependenciesBridge.shared.chatColorSettingStore.resolvedChatColor(
                 for: threadViewModel.threadRecord,
-                tx: tx
-            )
+                tx: tx,
+            ),
+            isStandaloneRenderItem: true,
         )
 
         return CVLoader.buildStandaloneRenderItem(
@@ -207,7 +224,7 @@ class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDele
             threadAssociatedData: threadViewModel.associatedData,
             conversationStyle: conversationStyle,
             spoilerState: self.spoilerState,
-            transaction: tx
+            transaction: tx,
         )
     }
 
@@ -216,18 +233,18 @@ class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDele
         threadAssociatedData: ThreadAssociatedData,
         message: TSMessage,
         forceDateHeader: Bool = false,
-        tx: DBReadTransaction
+        tx: DBReadTransaction,
     ) -> CVRenderItem? {
         let conversationStyle = ConversationStyle(
             type: .messageDetails,
             thread: thread,
-            viewWidth: view.frame.size.width,
+            viewWidth: view.width,
             hasWallpaper: false,
             isWallpaperPhoto: false,
             chatColor: DependenciesBridge.shared.chatColorSettingStore.resolvedChatColor(
                 for: thread,
-                tx: tx
-            )
+                tx: tx,
+            ),
         )
 
         // TODO: correct spoilerState
@@ -237,8 +254,17 @@ class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDele
             threadAssociatedData: threadAssociatedData,
             conversationStyle: conversationStyle,
             spoilerState: SpoilerRenderState(),
-            transaction: tx
+            transaction: tx,
         )
+    }
+
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            self?.db.read { tx in
+                self?.layoutPinnedMessages(tx: tx)
+            }
+        }
     }
 
     // MARK: - Interactions
@@ -281,9 +307,14 @@ class PinnedMessagesDetailsViewController: OWSViewController, DatabaseChangeDele
     }
 
     func unpinMessage(itemViewModel: CVItemViewModelImpl) {
-        dismiss(animated: true)
+        // if this is the last message, dismiss then unpin, otherwise, just unpin.
         guard let message = itemViewModel.interaction as? TSMessage else { return }
-        delegate?.unpinMessage(message: message)
+        if pinnedMessages.count <= 1 {
+            dismiss(animated: true)
+            delegate?.unpinMessage(message: message, modalDelegate: nil)
+            return
+        }
+        delegate?.unpinMessage(message: message, modalDelegate: self)
     }
 }
 
@@ -305,26 +336,26 @@ private class PinnedMessageLongPressDelegate: NSObject, UIContextMenuInteraction
 
     func contextMenuInteraction(
         _ interaction: UIContextMenuInteraction,
-        configurationForMenuAtLocation location: CGPoint
+        configurationForMenuAtLocation location: CGPoint,
     ) -> UIContextMenuConfiguration? {
 
         return UIContextMenuConfiguration(
             identifier: nil,
             previewProvider: nil,
             actionProvider: { [weak self] _ in
-                guard let self = self else { return UIMenu(children: []) }
+                guard let self else { return UIMenu(children: []) }
                 var actions: [UIAction] = []
                 if itemViewModel.canCopyOrShareOrSpeakText {
                     actions.append(
                         UIAction(
                             title: OWSLocalizedString(
                                 "CONTEXT_MENU_COPY",
-                                comment: "Context menu button title"
+                                comment: "Context menu button title",
                             ),
-                            image: .copyLight
+                            image: .copyLight,
                         ) { [weak self] _ in
                             self?.itemViewModel.copyTextAction()
-                    })
+                        })
                 }
 
                 if itemViewModel.canSaveMedia {
@@ -332,39 +363,43 @@ private class PinnedMessageLongPressDelegate: NSObject, UIContextMenuInteraction
                         UIAction(
                             title: OWSLocalizedString(
                                 "CONTEXT_MENU_SAVE_MEDIA",
-                                comment: "Context menu button title"
+                                comment: "Context menu button title",
                             ),
-                            image: .saveLight
+                            image: .saveLight,
                         ) { [weak self] _ in
                             self?.itemViewModel.saveMediaAction()
-                    })
+                        })
                 }
 
-                actions.append(contentsOf: [
-                    UIAction(
-                        title: OWSLocalizedString(
-                            "PINNED_MESSAGES_UNPIN",
-                            comment: "Action menu item to unpin a message"
-                        ),
-                        image: .pinSlash
-                    ) { [weak self] _ in
-                        guard let self = self else { return }
-                        actionDelegate?.unpinMessage(itemViewModel: itemViewModel)
-                    },
+                if BuildFlags.PinnedMessages.send {
+                    actions.append(
+                        UIAction(
+                            title: OWSLocalizedString(
+                                "PINNED_MESSAGES_UNPIN",
+                                comment: "Action menu item to unpin a message",
+                            ),
+                            image: .pinSlash,
+                        ) { [weak self] _ in
+                            guard let self else { return }
+                            actionDelegate?.unpinMessage(itemViewModel: itemViewModel)
+                        },
+                    )
+                }
+                actions.append(
                     UIAction(
                         title: OWSLocalizedString(
                             "CONTEXT_MENU_DELETE_MESSAGE",
-                            comment: "Context menu button title"
+                            comment: "Context menu button title",
                         ),
-                        image: .trashLight
+                        image: .trashLight,
                     ) { [weak self] _ in
-                            guard let self = self else { return }
-                            actionDelegate?.deleteMessage(itemViewModel: itemViewModel)
-                    }]
+                        guard let self else { return }
+                        actionDelegate?.deleteMessage(itemViewModel: itemViewModel)
+                    },
                 )
 
                 return UIMenu(children: actions)
-            }
+            },
         )
     }
 }
@@ -391,37 +426,42 @@ extension PinnedMessagesDetailsViewController: CVComponentDelegate {
     func didLongPressTextViewItem(
         _ cell: CVCell,
         itemViewModel: CVItemViewModelImpl,
-        shouldAllowReply: Bool) {}
+        shouldAllowReply: Bool,
+    ) {}
 
     func didLongPressMediaViewItem(
         _ cell: CVCell,
         itemViewModel: CVItemViewModelImpl,
-        shouldAllowReply: Bool) {}
+        shouldAllowReply: Bool,
+    ) {}
 
     func didLongPressQuote(
         _ cell: CVCell,
         itemViewModel: CVItemViewModelImpl,
-        shouldAllowReply: Bool) {}
+        shouldAllowReply: Bool,
+    ) {}
 
     func didLongPressSystemMessage(
         _ cell: CVCell,
-        itemViewModel: CVItemViewModelImpl) {}
+        itemViewModel: CVItemViewModelImpl,
+    ) {}
 
     func didLongPressSticker(
         _ cell: CVCell,
         itemViewModel: CVItemViewModelImpl,
-        shouldAllowReply: Bool) {}
+        shouldAllowReply: Bool,
+    ) {}
 
     func didLongPressPaymentMessage(
         _ cell: CVCell,
         itemViewModel: CVItemViewModelImpl,
-        shouldAllowReply: Bool
+        shouldAllowReply: Bool,
     ) {}
 
     func didLongPressPoll(
         _ cell: CVCell,
         itemViewModel: CVItemViewModelImpl,
-        shouldAllowReply: Bool
+        shouldAllowReply: Bool,
     ) {}
 
     func didTapPayment(_ payment: PaymentsHistoryItem) {}
@@ -450,7 +490,8 @@ extension PinnedMessagesDetailsViewController: CVComponentDelegate {
 
     func didTapReactions(
         reactionState: InteractionReactionState,
-        message: TSMessage) {}
+        message: TSMessage,
+    ) {}
 
     func didTapTruncatedTextMessage(_ itemViewModel: CVItemViewModelImpl) {}
 
@@ -473,11 +514,11 @@ extension PinnedMessagesDetailsViewController: CVComponentDelegate {
     func didTapBodyMedia(
         itemViewModel: CVItemViewModelImpl,
         attachmentStream: ReferencedAttachmentStream,
-        imageView: UIView
+        imageView: UIView,
     ) {}
 
     func didTapGenericAttachment(
-        _ attachment: CVComponentGenericAttachment
+        _ attachment: CVComponentGenericAttachment,
     ) -> CVAttachmentTapAction { .default }
 
     func didTapQuotedReply(_ quotedReply: QuotedReplyModel) {}
@@ -510,7 +551,8 @@ extension PinnedMessagesDetailsViewController: CVComponentDelegate {
         _ itemViewModel: CVItemViewModelImpl,
         profileBadge: ProfileBadge,
         isExpired: Bool,
-        isRedeemed: Bool) {}
+        isRedeemed: Bool,
+    ) {}
 
     func prepareMessageDetailForInteractivePresentation(_ itemViewModel: CVItemViewModelImpl) {}
 
@@ -518,11 +560,11 @@ extension PinnedMessagesDetailsViewController: CVComponentDelegate {
         return {}
     }
 
-    var isConversationPreview: Bool { true }
+    var isConversationPreview: Bool { false }
 
     var wallpaperBlurProvider: WallpaperBlurProvider? { nil }
 
-    public var selectionState: CVSelectionState { CVSelectionState() }
+    var selectionState: CVSelectionState { CVSelectionState() }
 
     func didTapPreviouslyVerifiedIdentityChange(_ address: SignalServiceAddress) {}
 
@@ -561,13 +603,15 @@ extension PinnedMessagesDetailsViewController: CVComponentDelegate {
     func didTapBlockRequest(
         groupModel: TSGroupModelV2,
         requesterName: String,
-        requesterAci: Aci) {}
+        requesterAci: Aci,
+    ) {}
 
     func didTapShowUpgradeAppUI() {}
 
     func didTapUpdateSystemContact(
         _ address: SignalServiceAddress,
-        newNameComponents: PersonNameComponents) {}
+        newNameComponents: PersonNameComponents,
+    ) {}
 
     func didTapPhoneNumberChange(aci: Aci, phoneNumberOld: String, phoneNumberNew: String) {}
 

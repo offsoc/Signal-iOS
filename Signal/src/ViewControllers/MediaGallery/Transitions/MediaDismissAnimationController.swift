@@ -135,23 +135,24 @@ extension MediaDismissAnimationController: UIViewControllerAnimatedTransitioning
 
         let backgroundView = UIView(frame: containerView.bounds)
         backgroundView.backgroundColor = fromMediaContext.backgroundColor
-        backgroundView.autoresizingMask = [ .flexibleWidth, .flexibleHeight ]
+        backgroundView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         containerView.addSubview(backgroundView)
 
+        // Sometimes the initial (from) or the final (to) media view is partially obscured
+        // (by navigation bar at the top and by the bottom bar at the bottom).
+        // To animate from one "viewport" to another we set up a clipping
+        // view that will contain the transitional media view.
         let clippingView = UIView(frame: containerView.bounds)
         clippingView.clipsToBounds = true
-        clippingView.autoresizingMask = [ .flexibleWidth, .flexibleHeight ]
-        if let clippingAreaInsets = fromMediaContext.clippingAreaInsets, clippingAreaInsets.isNonEmpty {
-            let maskLayer = CALayer()
-            maskLayer.frame = clippingView.layer.bounds.inset(by: clippingAreaInsets)
-            maskLayer.backgroundColor = UIColor.black.cgColor
-            clippingView.layer.mask = maskLayer
+        if let clippingAreaInsets = fromMediaContext.clippingAreaInsets {
+            clippingView.frame = containerView.bounds.inset(by: clippingAreaInsets)
         }
         containerView.addSubview(clippingView)
 
         // Can't do rounded corners and drop shadow at the same time,
         // so put image into a container view.
-        let transitionView = UIView(frame: fromMediaContext.presentationFrame)
+        let transitionViewFrame = clippingView.convert(fromMediaContext.presentationFrame, from: containerView)
+        let transitionView = UIView(frame: transitionViewFrame)
         transitionView.layer.shadowColor = UIColor.ows_blackAlpha20.cgColor
         transitionView.layer.shadowOffset = CGSize(width: 0, height: 32)
         transitionView.layer.shadowRadius = 48
@@ -161,7 +162,7 @@ extension MediaDismissAnimationController: UIViewControllerAnimatedTransitioning
 
         let imageView = MediaTransitionImageView(image: presentationImage)
         imageView.contentMode = .scaleAspectFill
-        imageView.autoresizingMask = [ .flexibleWidth, .flexibleHeight ]
+        imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         imageView.layer.masksToBounds = true
         imageView.shape = fromMediaContext.mediaViewShape
         imageView.frame = transitionView.bounds
@@ -194,30 +195,25 @@ extension MediaDismissAnimationController: UIViewControllerAnimatedTransitioning
             let animator = UIViewPropertyAnimator(
                 duration: duration,
                 springDamping: 1,
-                springResponse: 0.3,
-                initialVelocity: velocity ?? .zero
+                springResponse: 0.25,
+                initialVelocity: velocity ?? .zero,
             )
             animator.addAnimations {
                 if transitionContext.transitionWasCancelled == false {
                     fromView.alpha = 0
                     backgroundView.backgroundColor = toMediaContext?.backgroundColor
+
+                    if let clippingAreaInsets = toMediaContext?.clippingAreaInsets {
+                        clippingView.frame = containerView.bounds.inset(by: clippingAreaInsets)
+                    } else {
+                        clippingView.frame = containerView.bounds
+                    }
                 }
 
                 imageView.shape = destinationMediaViewShape
                 transitionView.transform = .identity
-                transitionView.frame = destinationFrame
+                transitionView.frame = clippingView.convert(destinationFrame, from: containerView)
                 transitionView.layer.shadowOpacity = 0
-
-                // TODO: this doesn't animate. fix it.
-                if !transitionContext.transitionWasCancelled,
-                   let clippingAreaInsets = toMediaContext?.clippingAreaInsets,
-                   clippingAreaInsets.isNonEmpty
-                {
-                    let maskLayer = CALayer()
-                    maskLayer.frame = clippingView.layer.bounds.inset(by: clippingAreaInsets)
-                    maskLayer.backgroundColor = UIColor.black.cgColor
-                    clippingView.layer.mask = maskLayer
-                }
             }
             animator.addCompletion { _ in
                 clippingView.removeFromSuperview()
@@ -247,7 +243,7 @@ extension MediaDismissAnimationController: UIViewControllerAnimatedTransitioning
         }
 
         fromContextProvider.mediaWillDismiss(fromContext: fromMediaContext)
-        if let toMediaContext = toMediaContext {
+        if let toMediaContext {
             toContextProvider.mediaWillDismiss(toContext: toMediaContext)
         }
 
@@ -274,7 +270,7 @@ extension MediaDismissAnimationController: UIViewControllerAnimatedTransitioning
 
                     self.pendingCompletion = nil
                     pendingCompletion(nil)
-                }
+                },
             )
         } else {
             completion(nil)
@@ -288,7 +284,7 @@ extension MediaDismissAnimationController: InteractiveDismissDelegate {
     func interactiveDismiss(
         _ interactiveDismiss: UIPercentDrivenInteractiveTransition,
         didChangeProgress progress: CGFloat,
-        touchOffset offset: CGPoint
+        touchOffset offset: CGPoint,
     ) {
         guard let transitionView else {
             // transition hasn't started yet.
@@ -305,7 +301,7 @@ extension MediaDismissAnimationController: InteractiveDismissDelegate {
 
     func interactiveDismiss(
         _ interactiveDismiss: UIPercentDrivenInteractiveTransition,
-        didFinishWithVelocity velocity: CGVector?
+        didFinishWithVelocity velocity: CGVector?,
     ) {
         if let pendingCompletion {
             self.pendingCompletion = nil

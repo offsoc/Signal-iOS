@@ -16,7 +16,7 @@ class AttachmentStoreTests: XCTestCase {
 
     override func setUp() async throws {
         db = InMemoryDB()
-        attachmentStore = AttachmentStoreImpl()
+        attachmentStore = AttachmentStore()
         attachmentUploadStore = AttachmentUploadStoreImpl(attachmentStore: attachmentStore)
     }
 
@@ -25,25 +25,25 @@ class AttachmentStoreTests: XCTestCase {
     func testInsert() throws {
         let attachmentParams = Attachment.ConstructionParams.mockPointer()
         let referenceParams = AttachmentReference.ConstructionParams.mock(
-            owner: .thread(.globalThreadWallpaperImage(creationTimestamp: Date().ows_millisecondsSince1970))
+            owner: .thread(.globalThreadWallpaperImage(creationTimestamp: Date().ows_millisecondsSince1970)),
         )
 
         try db.write { tx in
             _ = try attachmentStore.insert(
                 attachmentParams,
                 reference: referenceParams,
-                tx: tx
+                tx: tx,
             )
         }
 
         let (references, attachments) = db.read { tx in
             let references = attachmentStore.fetchReferences(
                 owners: [.globalThreadWallpaperImage],
-                tx: tx
+                tx: tx,
             )
             let attachments = attachmentStore.fetch(
                 ids: references.map(\.attachmentRowId),
-                tx: tx
+                tx: tx,
             )
             return (references, attachments)
         }
@@ -78,18 +78,18 @@ class AttachmentStoreTests: XCTestCase {
                 (messageId2, threadId2, message2AttachmentIds),
                 (messageId3, threadId3, message3AttachmentIds),
             ] {
-                try attachmentIds.enumerated().forEach { (index, id) in
+                try attachmentIds.enumerated().forEach { index, id in
                     let attachmentParams = Attachment.ConstructionParams.mockPointer()
                     let attachmentReferenceParams = AttachmentReference.ConstructionParams.mockMessageBodyAttachmentReference(
                         messageRowId: messageId,
                         threadRowId: threadId,
-                        orderInOwner: UInt32(index),
-                        idInOwner: id
+                        orderInMessage: UInt32(index),
+                        idInOwner: id,
                     )
                     try attachmentStore.insert(
                         attachmentParams,
                         reference: attachmentReferenceParams,
-                        tx: tx
+                        tx: tx,
                     )
                     attachmentIdToAttachmentParams[id] = attachmentParams
                     attachmentIdToAttachmentReferenceParams[id] = attachmentReferenceParams
@@ -105,11 +105,11 @@ class AttachmentStoreTests: XCTestCase {
             let (references, attachments) = db.read { tx in
                 let references = attachmentStore.fetchReferences(
                     owners: [.messageBodyAttachment(messageRowId: messageId)],
-                    tx: tx
+                    tx: tx,
                 )
                 let attachments = attachmentStore.fetch(
                     ids: references.map(\.attachmentRowId),
-                    tx: tx
+                    tx: tx,
                 )
                 return (references, attachments)
             }
@@ -156,32 +156,32 @@ class AttachmentStoreTests: XCTestCase {
         try db.write { tx in
             let attachmentReferenceParams1 = AttachmentReference.ConstructionParams.mockMessageBodyAttachmentReference(
                 messageRowId: messageId1,
-                threadRowId: threadId1
+                threadRowId: threadId1,
             )
             try attachmentStore.insert(
                 attachmentParams1,
                 reference: attachmentReferenceParams1,
-                tx: tx
+                tx: tx,
             )
 
             let message1References = attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId1)],
-                tx: tx
+                tx: tx,
             )
             let message1Attachment = attachmentStore.fetch(
                 ids: message1References.map(\.attachmentRowId),
-                tx: tx
+                tx: tx,
             ).first!
 
             let attachmentReferenceParams2 = AttachmentReference.ConstructionParams.mockMessageBodyAttachmentReference(
                 messageRowId: messageId2,
-                threadRowId: threadId2
+                threadRowId: threadId2,
             )
             do {
                 try attachmentStore.insert(
                     attachmentParams2,
                     reference: attachmentReferenceParams2,
-                    tx: tx
+                    tx: tx,
                 )
                 XCTFail("Should have thrown error!")
             } catch let error {
@@ -202,7 +202,7 @@ class AttachmentStoreTests: XCTestCase {
             try attachmentStore.addOwner(
                 attachmentReferenceParams2,
                 for: message1Attachment.id,
-                tx: tx
+                tx: tx,
             )
         }
 
@@ -210,23 +210,23 @@ class AttachmentStoreTests: XCTestCase {
             message1References,
             message1Attachments,
             message2References,
-            message2Attachments
+            message2Attachments,
         ) = db.read { tx in
             let message1References = attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId1)],
-                tx: tx
+                tx: tx,
             )
             let message1Attachments = attachmentStore.fetch(
                 ids: message1References.map(\.attachmentRowId),
-                tx: tx
+                tx: tx,
             )
             let message2References = attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId2)],
-                tx: tx
+                tx: tx,
             )
             let message2Attachments = attachmentStore.fetch(
                 ids: message1References.map(\.attachmentRowId),
-                tx: tx
+                tx: tx,
             )
             return (message1References, message1Attachments, message2References, message2Attachments)
         }
@@ -248,36 +248,36 @@ class AttachmentStoreTests: XCTestCase {
         let attachmentParams1 = Attachment.ConstructionParams.mockPointer()
         let date1 = Date()
         let referenceParams1 = AttachmentReference.ConstructionParams.mock(
-            owner: .thread(.globalThreadWallpaperImage(creationTimestamp: date1.ows_millisecondsSince1970))
+            owner: .thread(.globalThreadWallpaperImage(creationTimestamp: date1.ows_millisecondsSince1970)),
         )
         let attachmentParams2 = Attachment.ConstructionParams.mockPointer()
         let date2 = date1.addingTimeInterval(100)
         let referenceParams2 = AttachmentReference.ConstructionParams.mock(
-            owner: .thread(.globalThreadWallpaperImage(creationTimestamp: date2.ows_millisecondsSince1970))
+            owner: .thread(.globalThreadWallpaperImage(creationTimestamp: date2.ows_millisecondsSince1970)),
         )
 
         try db.write { tx in
             try attachmentStore.insert(
                 attachmentParams1,
                 reference: referenceParams1,
-                tx: tx
+                tx: tx,
             )
             // Insert which should overwrite the existing row.
             try attachmentStore.insert(
                 attachmentParams2,
                 reference: referenceParams2,
-                tx: tx
+                tx: tx,
             )
         }
 
         let (references, attachments) = db.read { tx in
             let references = attachmentStore.fetchReferences(
                 owners: [.globalThreadWallpaperImage],
-                tx: tx
+                tx: tx,
             )
             let attachments = attachmentStore.fetch(
                 ids: references.map(\.attachmentRowId),
-                tx: tx
+                tx: tx,
             )
             return (references, attachments)
         }
@@ -292,54 +292,6 @@ class AttachmentStoreTests: XCTestCase {
 
         assertEqual(attachmentParams2, attachment)
         try assertEqual(referenceParams2, reference)
-    }
-
-    func testInsertOverflowTimestamp() throws {
-        let (threadId, messageId) = insertThreadAndInteraction()
-
-        // Intentionally overflow
-        let receivedAtTimestamp: UInt64 = .max
-
-        OWSAssertionError.test_skipAssertions = true
-        defer { OWSAssertionError.test_skipAssertions = false }
-
-        do {
-            try db.write { tx in
-                let attachmentParams = Attachment.ConstructionParams.mockPointer()
-                let attachmentReferenceParams = AttachmentReference.ConstructionParams.mockMessageBodyAttachmentReference(
-                    messageRowId: messageId,
-                    threadRowId: threadId,
-                    receivedAtTimestamp: receivedAtTimestamp
-                )
-                try attachmentStore.insert(
-                    attachmentParams,
-                    reference: attachmentReferenceParams,
-                    tx: tx
-                )
-            }
-            // We should have failed! not failing is bad!
-            XCTFail("Should throw error on overflowed timestamp")
-        } catch {
-            // We should have failed! success!
-        }
-
-        do {
-            try db.write { tx in
-                let attachmentParams = Attachment.ConstructionParams.mockPointer()
-                let attachmentReferenceParams = AttachmentReference.ConstructionParams.mock(
-                    owner: .thread(.globalThreadWallpaperImage(creationTimestamp: receivedAtTimestamp))
-                )
-                try attachmentStore.insert(
-                    attachmentParams,
-                    reference: attachmentReferenceParams,
-                    tx: tx
-                )
-            }
-            // We should have failed! not failing is bad!
-            XCTFail("Should throw error on overflowed timestamp")
-        } catch {
-            // We should have failed! success!
-        }
     }
 
     // MARK: - Enumerate
@@ -360,20 +312,20 @@ class AttachmentStoreTests: XCTestCase {
                     let attachmentReferenceParams = AttachmentReference.ConstructionParams.mockMessageBodyAttachmentReference(
                         messageRowId: messageId,
                         threadRowId: threadId,
-                        orderInOwner: UInt32(index),
-                        idInOwner: attachmentIdInOwner
+                        orderInMessage: UInt32(index),
+                        idInOwner: attachmentIdInOwner,
                     )
                     if let attachmentRowId {
                         try attachmentStore.addOwner(
                             attachmentReferenceParams,
                             for: attachmentRowId,
-                            tx: tx
+                            tx: tx,
                         )
                     } else {
                         try attachmentStore.insert(
                             attachmentParams,
                             reference: attachmentReferenceParams,
-                            tx: tx
+                            tx: tx,
                         )
                         attachmentRowId = tx.database.lastInsertedRowID
                     }
@@ -386,11 +338,11 @@ class AttachmentStoreTests: XCTestCase {
         let attachmentId = db.read { tx in
             let references = attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: threadIdAndMessageIds[0].interactionRowId)],
-                tx: tx
+                tx: tx,
             )
             let attachment = attachmentStore.fetch(
                 ids: references.map(\.attachmentRowId),
-                tx: tx
+                tx: tx,
             )
             return attachment.first!.id
         }
@@ -402,12 +354,12 @@ class AttachmentStoreTests: XCTestCase {
                     let attachmentReferenceParams = AttachmentReference.ConstructionParams.mockMessageBodyAttachmentReference(
                         messageRowId: messageId,
                         threadRowId: threadId,
-                        orderInOwner: UInt32(index)
+                        orderInMessage: UInt32(index),
                     )
                     try attachmentStore.insert(
                         Attachment.ConstructionParams.mockPointer(),
                         reference: attachmentReferenceParams,
-                        tx: tx
+                        tx: tx,
                     )
                 }
             }
@@ -415,8 +367,8 @@ class AttachmentStoreTests: XCTestCase {
 
         // Check that we enumerate all the ids we created for the original attachment's id.
         var enumeratedCount = 0
-        try db.read { tx in
-            try attachmentStore.enumerateAllReferences(
+        db.read { tx in
+            attachmentStore.enumerateAllReferences(
                 toAttachmentId: attachmentId,
                 tx: tx,
                 block: { reference, _ in
@@ -430,44 +382,11 @@ class AttachmentStoreTests: XCTestCase {
                     default:
                         XCTFail("Unexpected attachment type!")
                     }
-                }
+                },
             )
         }
 
         XCTAssertEqual(enumeratedCount, attachmentIdsInOwner.count)
-    }
-
-    func testEnumerateAttachmentsWithMediaName() throws {
-        let attachmentCount = 100
-
-        let threadIds = db.write { tx in
-            (0..<attachmentCount).map { _ in
-                insertThread(tx: tx).sqliteRowId!
-            }
-        }
-
-        try db.write { tx in
-            try threadIds.forEach { threadId in
-                try attachmentStore.insert(
-                    .mockStream(),
-                    reference: .mock(owner: .thread(.threadWallpaperImage(.init(threadRowId: threadId, creationTimestamp: 0)))),
-                    tx: tx
-                )
-            }
-        }
-
-        // Check that we enumerate all the ids we created for the original attachment's id.
-        var enumeratedCount = 0
-        try db.read { tx in
-            try attachmentStore.enumerateAllAttachmentsWithMediaName(
-                tx: tx,
-                block: { _ in
-                    enumeratedCount += 1
-                }
-            )
-        }
-
-        XCTAssertEqual(enumeratedCount, attachmentCount)
     }
 
     func testOldestStickerPackReferences() throws {
@@ -493,11 +412,11 @@ class AttachmentStoreTests: XCTestCase {
                             isPastEditRevision: false,
                             caption: nil,
                             renderingFlag: .default,
-                            orderInOwner: 0,
+                            orderInMessage: 0,
                             idInOwner: nil,
-                            isViewOnce: false
+                            isViewOnce: false,
                         )))),
-                    tx: tx
+                    tx: tx,
                 )
             }
 
@@ -522,9 +441,9 @@ class AttachmentStoreTests: XCTestCase {
                                 contentType: .image,
                                 isPastEditRevision: false,
                                 stickerPackId: packId,
-                                stickerId: stickerId
+                                stickerId: stickerId,
                             )))),
-                        tx: tx
+                        tx: tx,
                     )
 
                     stickerPackIds[packId] = min(messageRowId, stickerPackIds[packId] ?? .max)
@@ -532,7 +451,7 @@ class AttachmentStoreTests: XCTestCase {
             }
         }
 
-        let readPackReferences =  try db.read { tx in
+        let readPackReferences = try db.read { tx in
             try attachmentStore.oldestStickerPackReferences(tx: tx)
         }
 
@@ -565,11 +484,11 @@ class AttachmentStoreTests: XCTestCase {
                             isPastEditRevision: false,
                             caption: nil,
                             renderingFlag: .default,
-                            orderInOwner: 0,
+                            orderInMessage: 0,
                             idInOwner: nil,
-                            isViewOnce: false
+                            isViewOnce: false,
                         )))),
-                    tx: tx
+                    tx: tx,
                 )
             }
 
@@ -586,7 +505,7 @@ class AttachmentStoreTests: XCTestCase {
                     stickerInfos[StickerInfo(
                         packId: packId,
                         packKey: Data(repeating: 8, count: Int(StickerManager.packKeyLength)),
-                        stickerId: stickerId
+                        stickerId: stickerId,
                     )] = attachmentCount
                     for _ in 0..<attachmentCount {
 
@@ -602,9 +521,9 @@ class AttachmentStoreTests: XCTestCase {
                                     contentType: .image,
                                     isPastEditRevision: false,
                                     stickerPackId: packId,
-                                    stickerId: stickerId
+                                    stickerId: stickerId,
                                 )))),
-                            tx: tx
+                            tx: tx,
                         )
                     }
 
@@ -618,7 +537,7 @@ class AttachmentStoreTests: XCTestCase {
                     expectedCount,
                     try attachmentStore
                         .allAttachmentIdsForSticker(stickerInfo, tx: tx)
-                        .count
+                        .count,
                 )
             }
         }
@@ -637,19 +556,19 @@ class AttachmentStoreTests: XCTestCase {
             let attachmentReferenceParams = AttachmentReference.ConstructionParams.mockMessageBodyAttachmentReference(
                 messageRowId: messageId,
                 threadRowId: threadId,
-                receivedAtTimestamp: initialReceivedAtTimestamp
+                receivedAtTimestamp: initialReceivedAtTimestamp,
             )
             try attachmentStore.insert(
                 attachmentParams,
                 reference: attachmentReferenceParams,
-                tx: tx
+                tx: tx,
             )
         }
 
         var reference = db.read { tx in
             return attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId)],
-                tx: tx
+                tx: tx,
             ).first!
         }
 
@@ -667,12 +586,12 @@ class AttachmentStoreTests: XCTestCase {
             try attachmentStore.update(
                 reference,
                 withReceivedAtTimestamp: changedReceivedAtTimestamp,
-                tx: tx
+                tx: tx,
             )
 
             return attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId)],
-                tx: tx
+                tx: tx,
             ).first!
         }
 
@@ -691,12 +610,12 @@ class AttachmentStoreTests: XCTestCase {
             let attachmentParams = Attachment.ConstructionParams.mockStream()
             let attachmentReferenceParams = AttachmentReference.ConstructionParams.mockMessageBodyAttachmentReference(
                 messageRowId: messageId,
-                threadRowId: threadId
+                threadRowId: threadId,
             )
             try attachmentStore.insert(
                 attachmentParams,
                 reference: attachmentReferenceParams,
-                tx: tx
+                tx: tx,
             )
         }
 
@@ -704,11 +623,11 @@ class AttachmentStoreTests: XCTestCase {
             return db.read { tx in
                 let references = attachmentStore.fetchReferences(
                     owners: [.messageBodyAttachment(messageRowId: messageId)],
-                    tx: tx
+                    tx: tx,
                 )
                 return attachmentStore.fetch(
                     ids: references.map(\.attachmentRowId),
-                    tx: tx
+                    tx: tx,
                 ).first!
             }
         }
@@ -729,7 +648,7 @@ class AttachmentStoreTests: XCTestCase {
             unencryptedByteCount: 100,
             integrityCheck: .digestSHA256Ciphertext(UUID().data),
             incrementalMacInfo: nil,
-            lastDownloadAttemptTimestamp: nil
+            lastDownloadAttemptTimestamp: nil,
         )
 
         // Mark it as uploaded.
@@ -737,7 +656,7 @@ class AttachmentStoreTests: XCTestCase {
             try attachmentUploadStore.markUploadedToTransitTier(
                 attachmentStream: stream,
                 info: transitTierInfo,
-                tx: tx
+                tx: tx,
             )
         }
 
@@ -761,29 +680,29 @@ class AttachmentStoreTests: XCTestCase {
                 attachmentParams,
                 reference: AttachmentReference.ConstructionParams.mockMessageBodyAttachmentReference(
                     messageRowId: messageId1,
-                    threadRowId: threadId1
+                    threadRowId: threadId1,
                 ),
-                tx: tx
+                tx: tx,
             )
             let attachmentId = tx.database.lastInsertedRowID
             try attachmentStore.addOwner(
                 AttachmentReference.ConstructionParams.mockMessageBodyAttachmentReference(
                     messageRowId: messageId2,
-                    threadRowId: threadId2
+                    threadRowId: threadId2,
                 ),
                 for: attachmentId,
-                tx: tx
+                tx: tx,
             )
         }
 
         let (reference1, reference2) = db.read { tx in
             let reference1 = attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId1)],
-                tx: tx
+                tx: tx,
             ).first!
             let reference2 = attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId2)],
-                tx: tx
+                tx: tx,
             ).first!
             return (reference1, reference2)
         }
@@ -794,25 +713,25 @@ class AttachmentStoreTests: XCTestCase {
             // Remove the first reference.
             try attachmentStore.removeOwner(
                 reference: reference1,
-                tx: tx
+                tx: tx,
             )
 
             // The attachment should still exist.
             XCTAssertNotNil(attachmentStore.fetch(
                 ids: [reference1.attachmentRowId],
-                tx: tx
+                tx: tx,
             ).first)
 
             // Remove the second reference.
             try attachmentStore.removeOwner(
                 reference: reference2,
-                tx: tx
+                tx: tx,
             )
 
             // The attachment should no longer exist.
             XCTAssertNil(attachmentStore.fetch(
                 ids: [reference1.attachmentRowId],
-                tx: tx
+                tx: tx,
             ).first)
         }
     }
@@ -832,28 +751,28 @@ class AttachmentStoreTests: XCTestCase {
                 reference: AttachmentReference.ConstructionParams.mockMessageBodyAttachmentReference(
                     messageRowId: messageId1,
                     threadRowId: threadId1,
-                    orderInOwner: 0,
-                    idInOwner: referenceUUID1
+                    orderInMessage: 0,
+                    idInOwner: referenceUUID1,
                 ),
-                tx: tx
+                tx: tx,
             )
             let attachmentId = tx.database.lastInsertedRowID
             try attachmentStore.addOwner(
                 AttachmentReference.ConstructionParams.mockMessageBodyAttachmentReference(
                     messageRowId: messageId1,
                     threadRowId: threadId1,
-                    orderInOwner: 1,
-                    idInOwner: referenceUUID2
+                    orderInMessage: 1,
+                    idInOwner: referenceUUID2,
                 ),
                 for: attachmentId,
-                tx: tx
+                tx: tx,
             )
         }
 
         let (reference1, reference2) = db.read { tx in
             let references = attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId1)],
-                tx: tx
+                tx: tx,
             ).sorted(by: {
                 $0.orderInOwningMessage! < $1.orderInOwningMessage!
             })
@@ -881,19 +800,19 @@ class AttachmentStoreTests: XCTestCase {
             // Remove the first reference.
             try attachmentStore.removeOwner(
                 reference: reference1,
-                tx: tx
+                tx: tx,
             )
 
             // The attachment should still exist.
             XCTAssertNotNil(attachmentStore.fetch(
                 ids: [reference1.attachmentRowId],
-                tx: tx
+                tx: tx,
             ).first)
 
             // Refetch references
             let references = attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId1)],
-                tx: tx
+                tx: tx,
             )
             XCTAssertEqual(references.count, 1)
             checkIdInOwner(of: references[0], matches: referenceUUID2)
@@ -917,12 +836,12 @@ class AttachmentStoreTests: XCTestCase {
                 let referenceParams = AttachmentReference.ConstructionParams.mock(
                     owner: .thread(threadRowId.map {
                         .threadWallpaperImage(.init(threadRowId: $0, creationTimestamp: timestamp))
-                    } ?? .globalThreadWallpaperImage(creationTimestamp: timestamp))
+                    } ?? .globalThreadWallpaperImage(creationTimestamp: timestamp)),
                 )
                 try attachmentStore.insert(
                     attachmentParams,
                     reference: referenceParams,
-                    tx: tx
+                    tx: tx,
                 )
             }
         }
@@ -935,11 +854,11 @@ class AttachmentStoreTests: XCTestCase {
                             .threadWallpaperImage(threadRowId: $0)
                         } ?? .globalThreadWallpaperImage
                     },
-                    tx: tx
+                    tx: tx,
                 )
                 let attachments = attachmentStore.fetch(
                     ids: references.map(\.attachmentRowId),
-                    tx: tx
+                    tx: tx,
                 )
                 XCTAssertEqual(references.count, expectedCount)
                 XCTAssertEqual(attachments.count, expectedCount)
@@ -952,7 +871,7 @@ class AttachmentStoreTests: XCTestCase {
 
         try db.write { tx in
             try attachmentStore.removeAllThreadOwners(
-                tx: tx
+                tx: tx,
             )
         }
 
@@ -967,13 +886,13 @@ class AttachmentStoreTests: XCTestCase {
             return (
                 thread.sqliteRowId!,
                 insertInteraction(thread: thread, tx: tx),
-                insertInteraction(thread: thread, tx: tx)
+                insertInteraction(thread: thread, tx: tx),
             )
         }
 
         let originalReferenceParams = AttachmentReference.ConstructionParams.mockMessageBodyAttachmentReference(
             messageRowId: messageId1,
-            threadRowId: threadId
+            threadRowId: threadId,
         )
 
         try db.write { tx in
@@ -981,7 +900,7 @@ class AttachmentStoreTests: XCTestCase {
             try attachmentStore.insert(
                 attachmentParams,
                 reference: originalReferenceParams,
-                tx: tx
+                tx: tx,
             )
         }
 
@@ -989,7 +908,7 @@ class AttachmentStoreTests: XCTestCase {
         let reference1 = db.read { tx in
             return attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId1)],
-                tx: tx
+                tx: tx,
             ).first!
         }
 
@@ -1003,7 +922,7 @@ class AttachmentStoreTests: XCTestCase {
                     newOwnerMessageRowId: messageId2,
                     newOwnerThreadRowId: threadId,
                     newOwnerIsPastEditRevision: false,
-                    tx: tx
+                    tx: tx,
                 )
             default:
                 XCTFail("Unexpected reference owner type")
@@ -1014,7 +933,7 @@ class AttachmentStoreTests: XCTestCase {
         let newReference = db.read { tx in
             return attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId2)],
-                tx: tx
+                tx: tx,
             ).first!
         }
 
@@ -1027,7 +946,7 @@ class AttachmentStoreTests: XCTestCase {
 
         let originalReferenceParams = AttachmentReference.ConstructionParams.mockMessageBodyAttachmentReference(
             messageRowId: messageId1,
-            threadRowId: threadId1
+            threadRowId: threadId1,
         )
 
         try db.write { tx in
@@ -1035,7 +954,7 @@ class AttachmentStoreTests: XCTestCase {
             try attachmentStore.insert(
                 attachmentParams,
                 reference: originalReferenceParams,
-                tx: tx
+                tx: tx,
             )
         }
 
@@ -1043,7 +962,7 @@ class AttachmentStoreTests: XCTestCase {
         let reference1 = db.read { tx in
             return attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId1)],
-                tx: tx
+                tx: tx,
             ).first!
         }
 
@@ -1061,7 +980,7 @@ class AttachmentStoreTests: XCTestCase {
                         newOwnerMessageRowId: messageId2,
                         newOwnerThreadRowId: threadId2,
                         newOwnerIsPastEditRevision: false,
-                        tx: tx
+                        tx: tx,
                     )
                 default:
                     XCTFail("Unexpected reference owner type")
@@ -1099,7 +1018,7 @@ class AttachmentStoreTests: XCTestCase {
             for (threadRowId, messageRowId) in [
                 (threadId1, messageId1),
                 (threadId1, messageId2),
-                (threadId2, messageId3)
+                (threadId2, messageId3),
             ] {
                 // Create an attachment and reference for each message.
                 let attachmentParams = Attachment.ConstructionParams.mockStream()
@@ -1107,9 +1026,9 @@ class AttachmentStoreTests: XCTestCase {
                     attachmentParams,
                     reference: AttachmentReference.ConstructionParams.mockMessageBodyAttachmentReference(
                         messageRowId: messageRowId!,
-                        threadRowId: threadRowId!
+                        threadRowId: threadRowId!,
                     ),
-                    tx: tx
+                    tx: tx,
                 )
             }
         }
@@ -1117,15 +1036,15 @@ class AttachmentStoreTests: XCTestCase {
         var (reference1, reference2, reference3) = db.read { tx in
             let reference1 = attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId1)],
-                tx: tx
+                tx: tx,
             ).first!
             let reference2 = attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId2)],
-                tx: tx
+                tx: tx,
             ).first!
             let reference3 = attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId3)],
-                tx: tx
+                tx: tx,
             ).first!
             return (reference1, reference2, reference3)
         }
@@ -1161,22 +1080,22 @@ class AttachmentStoreTests: XCTestCase {
             try attachmentStore.updateMessageAttachmentThreadRowIdsForThreadMerge(
                 fromThreadRowId: threadId1,
                 intoThreadRowId: threadId3,
-                tx: tx
+                tx: tx,
             )
         }
 
         (reference1, reference2, reference3) = db.read { tx in
             let reference1 = attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId1)],
-                tx: tx
+                tx: tx,
             ).first!
             let reference2 = attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId2)],
-                tx: tx
+                tx: tx,
             ).first!
             let reference3 = attachmentStore.fetchReferences(
                 owners: [.messageBodyAttachment(messageRowId: messageId3)],
-                tx: tx
+                tx: tx,
             ).first!
             return (reference1, reference2, reference3)
         }
@@ -1187,79 +1106,32 @@ class AttachmentStoreTests: XCTestCase {
         checkThreadRowId(of: reference3, matches: threadId2)
     }
 
-    // MARK: - UInt64 Field verification
+    // MARK: - UInt64 max values
 
-    func testUInt64RecordFields_Attachment() {
-        testUInt64FieldPresence(
-            sampleInstance: Attachment.Record(params: Attachment.ConstructionParams.mockPointer()),
-            keyPathNames: [
-                \.latestTransitUploadTimestamp: "latestTransitUploadTimestamp",
-                \.latestTransitLastDownloadAttemptTimestamp: "latestTransitLastDownloadAttemptTimestamp",
-                \.lastMediaTierDownloadAttemptTimestamp: "lastMediaTierDownloadAttemptTimestamp",
-                \.lastThumbnailDownloadAttemptTimestamp: "lastThumbnailDownloadAttemptTimestamp",
-                \.lastFullscreenViewTimestamp: "lastFullscreenViewTimestamp",
-                \.originalTransitUploadTimestamp: "originalTransitUploadTimestamp",
-            ]
-        )
-    }
+    /// Added as part of the introduction of `DBUInt64` and its first usage in
+    /// `Attachment.Record`. We don't need to implement this for every
+    /// subsequent type that uses `DBUInt64`.
+    func testUInt64MaxValues() throws {
+        try InMemoryDB().write { tx in
+            var attachmentRecord = Attachment.Record(attachment: MockAttachment.mock(
+                transitTierInfo: .mock(
+                    uploadTimestamp: .max,
+                    lastDownloadAttemptTimestamp: .max,
+                ),
+                mediaTierInfo: .mock(
+                    lastDownloadAttemptTimestamp: .max,
+                ),
+                thumbnailInfo: .mock(
+                    lastDownloadAttemptTimestamp: .max,
+                ),
+                lastFullscreenViewTimestamp: .max,
+            ))
 
-    func testUInt64RecordFields_MessageAttachmentReference() {
-        testUInt64FieldPresence(
-            sampleInstance: AttachmentReference.MessageAttachmentReferenceRecord(
-                ownerType: 1,
-                ownerRowId: 1,
-                attachmentRowId: 1,
-                receivedAtTimestamp: 1,
-                contentType: 1,
-                renderingFlag: 1,
-                idInMessage: nil,
-                orderInMessage: nil,
-                threadRowId: 1,
-                caption: nil,
-                sourceFilename: nil,
-                sourceUnencryptedByteCount: 1,
-                sourceMediaHeightPixels: 1,
-                sourceMediaWidthPixels: 1,
-                stickerPackId: nil,
-                stickerId: 1,
-                isViewOnce: false,
-                ownerIsPastEditRevision: false
-            ),
-            keyPathNames: [
-                \.receivedAtTimestamp: "receivedAtTimestamp"
-            ]
-        )
-    }
-
-    func testUInt64RecordFields_StoryMessageAttachmentReference() {
-        testUInt64FieldPresence(
-            sampleInstance: AttachmentReference.StoryMessageAttachmentReferenceRecord(
-                ownerType: 1,
-                ownerRowId: 1,
-                attachmentRowId: 1,
-                shouldLoop: false,
-                caption: nil,
-                captionBodyRanges: nil,
-                sourceFilename: nil,
-                sourceUnencryptedByteCount: 1,
-                sourceMediaHeightPixels: 1,
-                sourceMediaWidthPixels: 1
-            ),
-            keyPathNames: [:]
-        )
-    }
-
-    func testUInt64RecordFields_ThreadAttachmentReference() {
-        testUInt64FieldPresence(
-            sampleInstance: AttachmentReference.ThreadAttachmentReferenceRecord(
-                ownerRowId: 1,
-                attachmentRowId: 1,
-                creationTimestamp: 1
-            ),
-            keyPathNames: [
-                \.creationTimestamp: "creationTimestamp"
-            ]
-        )
+            try attachmentRecord.insert(tx.database)
+            let persisted = try Attachment.Record.fetchAll(tx.database)
+            XCTAssertEqual(persisted.count, 1)
+            XCTAssertEqual(persisted[0], attachmentRecord)
+        }
     }
 
     // MARK: - Helpers
@@ -1296,7 +1168,7 @@ class AttachmentStoreTests: XCTestCase {
             XCTAssertEqual(
                 try params.buildRecord(attachmentRowId: reference.attachmentRowId)
                     as! AttachmentReference.MessageAttachmentReferenceRecord,
-                AttachmentReference.MessageAttachmentReferenceRecord(attachmentReference: reference, messageSource: messageSource)
+                AttachmentReference.MessageAttachmentReferenceRecord(attachmentReference: reference, messageSource: messageSource),
             )
         case (.storyMessage, .storyMessage(let storyMessageSource)):
             XCTAssertEqual(
@@ -1304,47 +1176,17 @@ class AttachmentStoreTests: XCTestCase {
                     as! AttachmentReference.StoryMessageAttachmentReferenceRecord,
                 try AttachmentReference.StoryMessageAttachmentReferenceRecord(
                     attachmentReference: reference,
-                    storyMessageSource: storyMessageSource
-                )
+                    storyMessageSource: storyMessageSource,
+                ),
             )
         case (.thread, .thread(let threadSource)):
             XCTAssertEqual(
                 try params.buildRecord(attachmentRowId: reference.attachmentRowId)
                     as! AttachmentReference.ThreadAttachmentReferenceRecord,
-                AttachmentReference.ThreadAttachmentReferenceRecord(attachmentReference: reference, threadSource: threadSource)
+                AttachmentReference.ThreadAttachmentReferenceRecord(attachmentReference: reference, threadSource: threadSource),
             )
         case (.message, _), (.storyMessage, _), (.thread, _):
             XCTFail("Non matching owner types")
-        }
-    }
-
-    private func testUInt64FieldPresence<T: UInt64SafeRecord>(
-        sampleInstance: T,
-        keyPathNames: [PartialKeyPath<T>: String]
-    ) {
-        var declaredFieldNames = Set<String>()
-        for keyPath in T.uint64Fields {
-            guard let name = keyPathNames[keyPath] else {
-                XCTFail("Unexpected key path!")
-                continue
-            }
-            declaredFieldNames.insert(name)
-        }
-        for keyPath in T.uint64OptionalFields {
-            guard let name = keyPathNames[keyPath] else {
-                XCTFail("Unexpected key path!")
-                continue
-            }
-            declaredFieldNames.insert(name)
-        }
-        for (label, value) in Mirror(reflecting: sampleInstance).children {
-            guard
-                let label,
-                (type(of: value) == UInt64.self) || (type(of: value) == Optional<UInt64>.self)
-            else {
-                continue
-            }
-            XCTAssert(declaredFieldNames.contains(label), "Undeclared uint64 field: \(label)")
         }
     }
 }

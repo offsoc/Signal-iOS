@@ -11,6 +11,38 @@ import LibSignalClient
 /// - SeeAlso ``DeleteForMeOutgoingSyncMessageManager``
 @objc(DeleteForMeOutgoingSyncMessage)
 class DeleteForMeOutgoingSyncMessage: OWSOutgoingSyncMessage {
+    required init?(coder: NSCoder) {
+        self.contents = coder.decodeObject(of: NSData.self, forKey: "contents") as Data?
+        super.init(coder: coder)
+    }
+
+    override func encode(with coder: NSCoder) {
+        super.encode(with: coder)
+        if let contents {
+            coder.encode(contents, forKey: "contents")
+        }
+    }
+
+    override var hash: Int {
+        var hasher = Hasher()
+        hasher.combine(super.hash)
+        hasher.combine(contents)
+        return hasher.finalize()
+    }
+
+    override func isEqual(_ object: Any?) -> Bool {
+        guard let object = object as? Self else { return false }
+        guard super.isEqual(object) else { return false }
+        guard self.contents == object.contents else { return false }
+        return true
+    }
+
+    override func copy(with zone: NSZone? = nil) -> Any {
+        let result = super.copy(with: zone) as! Self
+        result.contents = self.contents
+        return result
+    }
+
     typealias Outgoing = DeleteForMeSyncMessage.Outgoing
 
     struct Contents: Codable {
@@ -29,25 +61,25 @@ class DeleteForMeOutgoingSyncMessage: OWSOutgoingSyncMessage {
         let conversationDeletes: [Outgoing.ConversationDelete]
         let localOnlyConversationDelete: [Outgoing.LocalOnlyConversationDelete]
 
-        #if TESTABLE_BUILD
+#if TESTABLE_BUILD
         init(
             messageDeletes: [Outgoing.MessageDeletes],
             nilAttachmentDeletes: Void,
             conversationDeletes: [Outgoing.ConversationDelete],
-            localOnlyConversationDelete: [Outgoing.LocalOnlyConversationDelete]
+            localOnlyConversationDelete: [Outgoing.LocalOnlyConversationDelete],
         ) {
             self.messageDeletes = messageDeletes
             self.attachmentDeletes = nil
             self.conversationDeletes = conversationDeletes
             self.localOnlyConversationDelete = localOnlyConversationDelete
         }
-        #endif
+#endif
 
         init(
             messageDeletes: [Outgoing.MessageDeletes],
             attachmentDeletes: [Outgoing.AttachmentDelete],
             conversationDeletes: [Outgoing.ConversationDelete],
-            localOnlyConversationDelete: [Outgoing.LocalOnlyConversationDelete]
+            localOnlyConversationDelete: [Outgoing.LocalOnlyConversationDelete],
         ) {
             self.attachmentDeletes = attachmentDeletes
             self.messageDeletes = messageDeletes
@@ -58,7 +90,7 @@ class DeleteForMeOutgoingSyncMessage: OWSOutgoingSyncMessage {
         fileprivate var asProto: SSKProtoSyncMessageDeleteForMe {
             let protoBuilder = SSKProtoSyncMessageDeleteForMe.builder()
             protoBuilder.setMessageDeletes(messageDeletes.map { $0.asProto })
-            if let attachmentDeletes = attachmentDeletes {
+            if let attachmentDeletes {
                 protoBuilder.setAttachmentDeletes(attachmentDeletes.map { $0.asProto })
             }
             protoBuilder.setConversationDeletes(conversationDeletes.map { $0.asProto })
@@ -68,21 +100,15 @@ class DeleteForMeOutgoingSyncMessage: OWSOutgoingSyncMessage {
     }
 
     /// A JSON-serialized ``Contents`` struct.
-    ///
-    /// - Important: The ObjC name must not change, for Mantle compatibility.
-    /// - Note
-    /// Nullability is intentional, since Mantle will set this property via its
-    /// reflection-based `init(coder:)` when we call `super.init(coder:)`.
-    @objc(contents)
-    private(set) var contentsData: Data!
+    private(set) var contents: Data!
 
     init?(
         contents: Contents,
         localThread: TSContactThread,
-        tx: DBReadTransaction
+        tx: DBReadTransaction,
     ) {
         do {
-            self.contentsData = try JSONEncoder().encode(contents)
+            self.contents = try JSONEncoder().encode(contents)
         } catch {
             owsFailDebug("Failed to encode sync message contents!")
             return nil
@@ -91,20 +117,12 @@ class DeleteForMeOutgoingSyncMessage: OWSOutgoingSyncMessage {
         super.init(localThread: localThread, transaction: tx)
     }
 
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-    }
+    override var isUrgent: Bool { false }
 
-    required init(dictionary dictionaryValue: [String: Any]!) throws {
-        try super.init(dictionary: dictionaryValue)
-    }
-
-    override public var isUrgent: Bool { false }
-
-    override public func syncMessageBuilder(transaction: DBReadTransaction) -> SSKProtoSyncMessageBuilder? {
+    override func syncMessageBuilder(transaction: DBReadTransaction) -> SSKProtoSyncMessageBuilder? {
         let contents: Contents
         do {
-            contents = try JSONDecoder().decode(Contents.self, from: contentsData)
+            contents = try JSONDecoder().decode(Contents.self, from: self.contents)
         } catch let error {
             owsFailDebug("Failed to decode serialized sync message contents! \(error)")
             return nil
@@ -158,22 +176,22 @@ extension DeleteForMeSyncMessage.Outgoing {
             self.sentTimestamp = sentTimestamp
         }
 
-        #if TESTABLE_BUILD
+#if TESTABLE_BUILD
         static func forTests(author: Author, sentTimestamp: UInt64) -> AddressableMessage {
             return AddressableMessage(author: author, sentTimestamp: sentTimestamp)
         }
-        #endif
+#endif
 
         static func addressing(
             message: TSMessage,
-            localIdentifiers: LocalIdentifiers
+            localIdentifiers: LocalIdentifiers,
         ) -> AddressableMessage? {
             if let incomingMessage = message as? TSIncomingMessage {
                 return AddressableMessage(incomingMessage: incomingMessage)
             } else if let outgoingMessage = message as? TSOutgoingMessage {
                 return AddressableMessage(
                     outgoingMessage: outgoingMessage,
-                    localIdentifiers: localIdentifiers
+                    localIdentifiers: localIdentifiers,
                 )
             }
 
@@ -265,25 +283,25 @@ extension DeleteForMeSyncMessage.Outgoing {
         let mostRecentNonExpiringAddressableMessages: [AddressableMessage]?
         let isFullDelete: Bool
 
-        #if TESTABLE_BUILD
+#if TESTABLE_BUILD
         init(
             conversationIdentifier: ConversationIdentifier,
             mostRecentAddressableMessages: [AddressableMessage],
             nilNonExpiringAddressableMessages: Void,
-            isFullDelete: Bool
+            isFullDelete: Bool,
         ) {
             self.conversationIdentifier = conversationIdentifier
             self.mostRecentAddressableMessages = mostRecentAddressableMessages
             self.mostRecentNonExpiringAddressableMessages = nil
             self.isFullDelete = isFullDelete
         }
-        #endif
+#endif
 
         init(
             conversationIdentifier: ConversationIdentifier,
             mostRecentAddressableMessages: [AddressableMessage],
             mostRecentNonExpiringAddressableMessages: [AddressableMessage],
-            isFullDelete: Bool
+            isFullDelete: Bool,
         ) {
             self.conversationIdentifier = conversationIdentifier
             self.mostRecentAddressableMessages = mostRecentAddressableMessages

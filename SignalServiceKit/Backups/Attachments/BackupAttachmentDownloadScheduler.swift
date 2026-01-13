@@ -17,8 +17,8 @@ public protocol BackupAttachmentDownloadScheduler {
         backupPlan: BackupPlan,
         remoteConfig: RemoteConfig,
         isPrimaryDevice: Bool,
-        tx: DBWriteTransaction
-    ) throws
+        tx: DBWriteTransaction,
+    )
 }
 
 public class BackupAttachmentDownloadSchedulerImpl: BackupAttachmentDownloadScheduler {
@@ -37,22 +37,22 @@ public class BackupAttachmentDownloadSchedulerImpl: BackupAttachmentDownloadSche
         backupPlan: BackupPlan,
         remoteConfig: RemoteConfig,
         isPrimaryDevice: Bool,
-        tx: DBWriteTransaction
-    ) throws {
+        tx: DBWriteTransaction,
+    ) {
         let eligibility = BackupAttachmentDownloadEligibility.forAttachment(
             referencedAttachment.attachment,
-            reference: referencedAttachment.reference,
+            mostRecentReference: referencedAttachment.reference,
             currentTimestamp: restoreStartTimestampMs,
             backupPlan: backupPlan,
             remoteConfig: remoteConfig,
-            isPrimaryDevice: isPrimaryDevice
+            isPrimaryDevice: isPrimaryDevice,
         )
 
         if
             let state = eligibility.thumbnailMediaTierState,
             state != .done
         {
-            try backupAttachmentDownloadStore.enqueue(
+            backupAttachmentDownloadStore.enqueue(
                 referencedAttachment,
                 thumbnail: true,
                 // Thumbnails are always media tier
@@ -63,14 +63,14 @@ public class BackupAttachmentDownloadSchedulerImpl: BackupAttachmentDownloadSche
                 // Don't trigger per-item logs from backups; too noisy
                 file: nil,
                 function: nil,
-                line: nil
+                line: nil,
             )
         }
         if
             let state = eligibility.fullsizeState,
             state != .done
         {
-            try backupAttachmentDownloadStore.enqueue(
+            backupAttachmentDownloadStore.enqueue(
                 referencedAttachment,
                 thumbnail: false,
                 canDownloadFromMediaTier: eligibility.canDownloadMediaTierFullsize,
@@ -80,7 +80,7 @@ public class BackupAttachmentDownloadSchedulerImpl: BackupAttachmentDownloadSche
                 // Don't trigger per-item logs from backups; too noisy
                 file: nil,
                 function: nil,
-                line: nil
+                line: nil,
             )
         }
     }
@@ -98,8 +98,8 @@ open class BackupAttachmentDownloadSchedulerMock: BackupAttachmentDownloadSchedu
         backupPlan: BackupPlan,
         remoteConfig: RemoteConfig,
         isPrimaryDevice: Bool,
-        tx: DBWriteTransaction
-    ) throws {
+        tx: DBWriteTransaction,
+    ) {
         // Do nothing
     }
 }

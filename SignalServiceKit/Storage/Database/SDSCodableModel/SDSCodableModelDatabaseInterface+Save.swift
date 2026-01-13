@@ -8,7 +8,7 @@ extension SDSCodableModelDatabaseInterfaceImpl {
     /// Insert the given model to the database.
     func insertModel<Model: SDSCodableModel>(
         _ model: Model,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) {
         saveModelToDatabase(model, saveMode: .insert, transaction: transaction)
     }
@@ -20,12 +20,12 @@ extension SDSCodableModelDatabaseInterfaceImpl {
     /// update.
     func upsertModel<Model: SDSCodableModel>(
         _ model: Model,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) {
         let shouldInsert: Bool = fetchModel(
             modelType: Model.self,
             uniqueId: model.uniqueId,
-            transaction: transaction
+            transaction: transaction,
         ) == nil
 
         if shouldInsert {
@@ -58,15 +58,17 @@ extension SDSCodableModelDatabaseInterfaceImpl {
     func updateModel<Model: SDSCodableModel & AnyObject>(
         _ model: Model,
         transaction: DBWriteTransaction,
-        block: (Model) -> Void
+        block: (Model) -> Void,
     ) {
         block(model)
 
-        guard let dbCopy: Model = fetchModel(
-            modelType: Model.self,
-            uniqueId: model.uniqueId,
-            transaction: transaction
-        ) else {
+        guard
+            let dbCopy: Model = fetchModel(
+                modelType: Model.self,
+                uniqueId: model.uniqueId,
+                transaction: transaction,
+            )
+        else {
             return
         }
 
@@ -89,7 +91,7 @@ extension SDSCodableModelDatabaseInterfaceImpl {
     /// the same transaction.
     func overwritingUpdateModel<Model: SDSCodableModel>(
         _ model: Model,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) {
         saveModelToDatabase(model, saveMode: .update, transaction: transaction)
     }
@@ -102,7 +104,7 @@ private extension SDSCodableModelDatabaseInterface {
     /// Get the row ID of this model if it has already been persisted.
     func existingGrdbRowId<Model: SDSCodableModel>(
         forModel model: Model,
-        transaction: DBReadTransaction
+        transaction: DBReadTransaction,
     ) -> SDSCodableModel.RowId? {
         do {
             let databaseTableName = Model.databaseTableName.quotedDatabaseIdentifier
@@ -114,7 +116,7 @@ private extension SDSCodableModelDatabaseInterface {
             return try SDSCodableModel.RowId.fetchOne(
                 transaction.database,
                 sql: sql,
-                arguments: [model.uniqueId]
+                arguments: [model.uniqueId],
             )
         } catch let error {
             owsFailDebug("Failed to fetch GRDB row ID for uniqueId: \(error)")
@@ -132,7 +134,7 @@ private extension SDSCodableModelDatabaseInterface {
     func saveModelToDatabase<Model: SDSCodableModel>(
         _ model: Model,
         saveMode: SDSSaveMode,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) {
         guard model.shouldBeSaved else {
             Logger.warn("Skipping save of: \(Model.self).")
@@ -149,7 +151,7 @@ private extension SDSCodableModelDatabaseInterface {
         faultTolerantSaveModelToDatabase(
             model,
             saveMode: saveMode,
-            transaction: transaction
+            transaction: transaction,
         )
 
         switch saveMode {
@@ -167,23 +169,23 @@ private extension SDSCodableModelDatabaseInterface {
     func faultTolerantSaveModelToDatabase<Model: SDSCodableModel>(
         _ model: Model,
         saveMode: SDSSaveMode,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) {
         if let existingGrdbRowId = existingGrdbRowId(forModel: model, transaction: transaction) {
             owsAssertDebug(
                 saveMode == .update,
-                "Could not insert existing record - updating instead."
+                "Could not insert existing record - updating instead.",
             )
 
             updateModelInDatabase(
                 model,
                 existingGrdbRowId: existingGrdbRowId,
-                transaction: transaction
+                transaction: transaction,
             )
         } else {
             owsAssertDebug(
                 saveMode == .insert,
-                "Could not update non-existent record - inserting instead."
+                "Could not update non-existent record - inserting instead.",
             )
 
             insertToDatabase(model: model, transaction: transaction)
@@ -193,36 +195,22 @@ private extension SDSCodableModelDatabaseInterface {
     func updateModelInDatabase<Model: SDSCodableModel>(
         _ model: Model,
         existingGrdbRowId: SDSCodableModel.RowId,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) {
-        do {
+        failIfThrows {
             var recordCopy = model
             recordCopy.id = existingGrdbRowId
 
             try recordCopy.update(transaction.database)
-        } catch let error {
-            DatabaseCorruptionState.flagDatabaseCorruptionIfNecessary(
-                userDefaults: CurrentAppContext().appUserDefaults(),
-                error: error
-            )
-
-            owsFail("Update failed: \(error.grdbErrorForLogging)")
         }
     }
 
     func insertToDatabase<Model: SDSCodableModel>(
         model: Model,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) {
-        do {
+        failIfThrows {
             try model.insert(transaction.database)
-        } catch let error {
-            DatabaseCorruptionState.flagDatabaseCorruptionIfNecessary(
-                userDefaults: CurrentAppContext().appUserDefaults(),
-                error: error
-            )
-
-            owsFail("Insert failed: \(error.grdbErrorForLogging)")
         }
     }
 }

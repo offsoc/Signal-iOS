@@ -19,6 +19,7 @@ public enum MimeType: String {
     case imageHeic = "image/heic"
     case imageHeif = "image/heif"
     case imageJpeg = "image/jpeg"
+    case imageJpegXl = "image/jxl"
     case imagePng = "image/png"
     case imageTiff = "image/tiff"
     case imageVndMozillaApng = "image/vnd.mozilla.apng"
@@ -32,47 +33,48 @@ public enum MimeType: String {
 public enum MimeTypeUtil {
 
     // MARK: - Constants
+
     public static let oversizeTextAttachmentFileExtension = "txt"
     public static let syncMessageFileExtension = "bin"
 
     // MARK: - Supported Mime Types
+
     public static func isSupportedVideoMimeType(_ contentType: String) -> Bool {
-        supportedVideoMimeTypesToExtensionTypes[contentType] != nil
+        return supportedVideoMimeTypes.contains(contentType)
     }
+
     public static func isSupportedAudioMimeType(_ contentType: String) -> Bool {
-        supportedAudioMimeTypesToExtensionTypes[contentType] != nil
+        return supportedAudioMimeTypes.contains(contentType)
     }
+
     public static func isSupportedImageMimeType(_ contentType: String) -> Bool {
-        supportedImageMimeTypesToExtensionTypes[contentType] != nil
+        return supportedInputImageMimeTypes.contains(contentType)
     }
+
     public static func isSupportedDefinitelyAnimatedMimeType(_ contentType: String) -> Bool {
-        supportedDefinitelyAnimatedMimeTypesToExtensionTypes[contentType] != nil
+        return supportedDefinitelyAnimatedMimeTypes.contains(contentType)
     }
+
     public static func isSupportedMaybeAnimatedMimeType(_ contentType: String) -> Bool {
-        supportedMaybeAnimatedMimeTypesToExtensionTypes[contentType] != nil
+        return supportedMaybeAnimatedMimeTypes.contains(contentType)
     }
-    public static func isSupportedBinaryDataMimeType(_ contentType: String) -> Bool {
-        supportedBinaryDataMimeTypesToExtensionTypes[contentType] != nil
-    }
+
     public static func isSupportedVisualMediaMimeType(_ contentType: String) -> Bool {
         isSupportedImageMimeType(contentType)
-        || isSupportedVideoMimeType(contentType)
-        || isSupportedMaybeAnimatedMimeType(contentType)
+            || isSupportedVideoMimeType(contentType)
+            || isSupportedMaybeAnimatedMimeType(contentType)
     }
 
     // MARK: - Supported Uti Types
-    public static let supportedVideoUtiTypes: Set<String> = Set(utiTypesForMimeTypes(supportedVideoMimeTypesToExtensionTypes.keys))
-    public static let supportedAudioUtiTypes: Set<String> = Set(utiTypesForMimeTypes(supportedAudioMimeTypesToExtensionTypes.keys))
-    public static let supportedInputImageUtiTypes: Set<String> = Set(utiTypesForMimeTypes(supportedImageMimeTypesToExtensionTypes.keys))
-    public static let supportedOutputImageUtiTypes: Set<String> = Set(utiTypesForMimeTypes(supportedImageMimeTypesToExtensionTypes.keys,
-                                                                                           excluding: [MimeType.imageWebp.rawValue, MimeType.imageHeic.rawValue, MimeType.imageHeif.rawValue]))
-    public static let supportedAnimatedImageUtiTypes: Set<String> = Set(utiTypesForMimeTypes(supportedMaybeAnimatedMimeTypesToExtensionTypes.keys))
-    private static func utiTypesForMimeTypes<S: Sequence<String>>(_ mimeTypes: S, excluding excludedMimeTypes: Set<String>? = nil) -> Set<String> {
+
+    public static let supportedVideoUtiTypes: Set<String> = utiTypesForMimeTypes(supportedVideoMimeTypes)
+    public static let supportedAudioUtiTypes: Set<String> = utiTypesForMimeTypes(supportedAudioMimeTypes)
+    public static let supportedImageUtiTypes: Set<String> = utiTypesForMimeTypes(supportedImageMimeTypes)
+    public static let supportedAnimatedImageUtiTypes: Set<String> = utiTypesForMimeTypes(supportedMaybeAnimatedMimeTypes)
+
+    private static func utiTypesForMimeTypes(_ mimeTypes: some Sequence<String>) -> Set<String> {
         var result = Set<String>()
         for mimeType in mimeTypes {
-            if excludedMimeTypes?.contains(mimeType) ?? false {
-                continue
-            }
             guard let utiType = utiTypeForMimeType(mimeType) else {
                 owsFailDebug("unknown utiType for mimetype: \(mimeType)")
                 continue
@@ -82,24 +84,8 @@ public enum MimeTypeUtil {
         return result
     }
 
-    // MARK: - Mime Type to Extension Conversion
-    fileprivate static func getSupportedExtensionFromVideoMimeType(_ supportedMimeType: String) -> String? {
-        supportedVideoMimeTypesToExtensionTypes[supportedMimeType]
-    }
-    static func getSupportedExtensionFromAudioMimeType(_ supportedMimeType: String) -> String? {
-        supportedAudioMimeTypesToExtensionTypes[supportedMimeType]
-    }
-    fileprivate static func getSupportedExtensionFromImageMimeType(_ supportedMimeType: String) -> String? {
-        supportedImageMimeTypesToExtensionTypes[supportedMimeType]
-    }
-    fileprivate static func getSupportedExtensionFromAnimatedMimeType(_ supportedMimeType: String) -> String? {
-        supportedMaybeAnimatedMimeTypesToExtensionTypes[supportedMimeType]
-    }
-    fileprivate static func getSupportedExtensionFromBinaryDataMimeType(_ supportedMimeType: String) -> String? {
-        supportedBinaryDataMimeTypesToExtensionTypes[supportedMimeType]
-    }
-
     // MARK: - Conversion Functions for UTI Type / MIME Type / File Extension
+
     public static func utiTypeForMimeType(_ mimeType: String) -> String? {
         UTType(mimeType: mimeType)?.identifier
     }
@@ -113,6 +99,7 @@ public enum MimeTypeUtil {
         owsAssertDebug(!fileExtension.isEmpty)
         return genericExtensionTypesToMimeTypes[fileExtension]
     }
+
     public static func fileExtensionForUtiType(_ utiType: String) -> String? {
         // Special-case the "aac" filetype we use for voice messages (for legacy reasons)
         // to use a .m4a file extension, not .aac, since AVAudioPlayer can't handle .aac
@@ -123,6 +110,7 @@ public enum MimeTypeUtil {
             return UTType(utiType)?.preferredFilenameExtension
         }
     }
+
     public static func fileExtensionForMimeType(_ mimeType: String) -> String? {
         if mimeType == MimeType.textXSignalPlain.rawValue {
             return oversizeTextAttachmentFileExtension
@@ -136,6 +124,7 @@ public enum MimeTypeUtil {
         // extension .mp4 instead of .m4a.
         return genericMimeTypesToExtensionTypes[mimeType] ?? fileExtensionForMimeTypeViaUtiType(mimeType)
     }
+
     private static func fileExtensionForMimeTypeViaUtiType(_ mimeType: String) -> String? {
         guard let utiType = utiTypeForMimeType(mimeType) else {
             return nil
@@ -143,62 +132,62 @@ public enum MimeTypeUtil {
         return fileExtensionForUtiType(utiType)
     }
 
-    // MARK: - Mime Types to Extension Dictionaries
-    public static let supportedVideoMimeTypesToExtensionTypes: [String: String] = [
-        "video/3gpp": "3gp",
-        "video/3gpp2": "3g2",
-        "video/mp4": "mp4",
-        "video/quicktime": "mov",
-        "video/x-m4v": "m4v",
-        "video/mpeg": "mpg",
+    // MARK: - Supported Mime Types
+
+    public static let supportedVideoMimeTypes: Set<String> = [
+        "video/3gpp",
+        "video/3gpp2",
+        "video/mp4",
+        "video/quicktime",
+        "video/x-m4v",
+        "video/mpeg",
     ]
-    public static let supportedAudioMimeTypesToExtensionTypes: [String: String] = [
-        "audio/aac": "m4a",
-        "audio/x-m4p": "m4p",
-        "audio/x-m4b": "m4b",
-        "audio/x-m4a": "m4a",
-        "audio/wav": "wav",
-        "audio/x-wav": "wav",
-        "audio/x-mpeg": "mp3",
-        "audio/mpeg": "mp3",
-        "audio/mp4": "mp4",
-        "audio/mp3": "mp3",
-        "audio/mpeg3": "mp3",
-        "audio/x-mp3": "mp3",
-        "audio/x-mpeg3": "mp3",
-        "audio/aiff": "aiff",
-        "audio/x-aiff": "aiff",
-        "audio/3gpp2": "3g2",
-        "audio/3gpp": "3gp",
+    public static let supportedAudioMimeTypes: Set<String> = [
+        "audio/aac",
+        "audio/x-m4p",
+        "audio/x-m4b",
+        "audio/x-m4a",
+        "audio/wav",
+        "audio/x-wav",
+        "audio/x-mpeg",
+        "audio/mpeg",
+        "audio/mp4",
+        "audio/mp3",
+        "audio/mpeg3",
+        "audio/x-mp3",
+        "audio/x-mpeg3",
+        "audio/aiff",
+        "audio/x-aiff",
+        "audio/3gpp2",
+        "audio/3gpp",
     ]
-    public static let supportedImageMimeTypesToExtensionTypes: [String: String] = [
-        MimeType.imageJpeg.rawValue: "jpeg",
-        "image/pjpeg": "jpeg",
-        MimeType.imagePng.rawValue: "png",
-        MimeType.imageTiff.rawValue: "tif",
-        MimeType.imageXTiff.rawValue: "tif",
-        MimeType.imageBmp.rawValue: "bmp",
-        MimeType.imageXWindowsBmp.rawValue: "bmp",
-        MimeType.imageHeic.rawValue: "heic",
-        MimeType.imageHeif.rawValue: "heif",
-        MimeType.imageWebp.rawValue: "webp",
+    /// Images formats supported for sending AND receiving.
+    public static let supportedImageMimeTypes: Set<String> = [
+        MimeType.imageJpeg.rawValue,
+        "image/pjpeg",
+        MimeType.imagePng.rawValue,
+        MimeType.imageTiff.rawValue,
+        MimeType.imageXTiff.rawValue,
+        MimeType.imageBmp.rawValue,
+        MimeType.imageXWindowsBmp.rawValue,
     ]
-    public static let supportedDefinitelyAnimatedMimeTypesToExtensionTypes: [String: String] = {
-        return [
-            MimeType.imageGif.rawValue: "gif",
-            MimeType.imageApng.rawValue: "png",
-            MimeType.imageVndMozillaApng.rawValue: "png",
-        ]
-    }()
-    public static let supportedMaybeAnimatedMimeTypesToExtensionTypes: [String: String] = {
-        var result = supportedDefinitelyAnimatedMimeTypesToExtensionTypes
-        result[MimeType.imageWebp.rawValue] = "webp"
-        result[MimeType.imagePng.rawValue] = "png"
+    public static let supportedInputImageMimeTypes: Set<String> = supportedImageMimeTypes.union([
+        MimeType.imageHeic.rawValue,
+        MimeType.imageHeif.rawValue,
+        MimeType.imageWebp.rawValue,
+    ])
+    public static let supportedDefinitelyAnimatedMimeTypes: Set<String> = [
+        MimeType.imageGif.rawValue,
+        MimeType.imageApng.rawValue,
+        MimeType.imageVndMozillaApng.rawValue,
+    ]
+    public static let supportedMaybeAnimatedMimeTypes: Set<String> = {
+        var result = supportedDefinitelyAnimatedMimeTypes
+        result.insert(MimeType.imageWebp.rawValue)
+        result.insert(MimeType.imagePng.rawValue)
         return result
     }()
-    public static let supportedBinaryDataMimeTypesToExtensionTypes: [String: String] = [
-        MimeType.applicationOctetStream.rawValue: "dat",
-    ]
+
     public static let genericMimeTypesToExtensionTypes: [String: String] = [
         MimeType.imageApng.rawValue: "png",
         MimeType.imageVndMozillaApng.rawValue: "png",
@@ -1031,6 +1020,7 @@ public enum MimeTypeUtil {
         MimeType.imageHeif.rawValue: "heif",
         "image/ief": "ief",
         MimeType.imageJpeg.rawValue: "jpg",
+        MimeType.imageJpegXl.rawValue: "jxl",
         "image/jutvision": "jut",
         "image/ktx": "ktx",
         "image/pict": "pict",
@@ -1264,6 +1254,7 @@ public enum MimeTypeUtil {
     ]
 
     // MARK: - Extension to Mime Type Dictionaries
+
     public static let genericExtensionTypesToMimeTypes: [String: String] = [
         // Common MIME types.
         "123": "application/vnd.lotus-1-2-3",
@@ -1628,6 +1619,7 @@ public enum MimeTypeUtil {
         "js": "application/javascript",
         "json": MimeType.applicationJson.rawValue,
         "jsonml": "application/jsonml+json",
+        "jxl": MimeType.imageJpegXl.rawValue,
         "kar": "audio/midi",
         "karbon": "application/vnd.kde.karbon",
         "kfo": "application/vnd.kde.kformula",
@@ -2303,11 +2295,12 @@ extension MimeTypeUtil {
 }
 
 // MARK: - Thumbnail Handling
+
 extension MimeTypeUtil {
 
     public static func thumbnailMimetype(
         fullsizeMimeType: String,
-        quality: AttachmentThumbnailQuality
+        quality: AttachmentThumbnailQuality,
     ) -> String {
         if quality == .backupThumbnail {
             return MimeType.imageWebp.rawValue

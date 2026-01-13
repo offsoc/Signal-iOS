@@ -39,7 +39,7 @@ class OutgoingCallEvent: NSObject, NSCoding {
         callId: UInt64,
         callType: CallType,
         eventDirection: EventDirection,
-        eventType: EventType
+        eventType: EventType,
     ) {
         self.timestamp = timestamp
         self.conversationId = conversationId
@@ -102,35 +102,48 @@ class OutgoingCallEvent: NSObject, NSCoding {
 /// - SeeAlso ``IncomingCallEventSyncMessageManager``
 @objc(OutgoingCallEventSyncMessage)
 public class OutgoingCallEventSyncMessage: OWSOutgoingSyncMessage {
+    public required init?(coder: NSCoder) {
+        self.callEvent = coder.decodeObject(of: OutgoingCallEvent.self, forKey: "event")
+        super.init(coder: coder)
+    }
+
+    override public func encode(with coder: NSCoder) {
+        super.encode(with: coder)
+        if let callEvent {
+            coder.encode(callEvent, forKey: "event")
+        }
+    }
+
+    override public var hash: Int {
+        var hasher = Hasher()
+        hasher.combine(super.hash)
+        hasher.combine(callEvent)
+        return hasher.finalize()
+    }
+
+    override public func isEqual(_ object: Any?) -> Bool {
+        guard let object = object as? Self else { return false }
+        guard super.isEqual(object) else { return false }
+        guard self.callEvent == object.callEvent else { return false }
+        return true
+    }
+
+    override public func copy(with zone: NSZone? = nil) -> Any {
+        let result = super.copy(with: zone) as! Self
+        result.callEvent = self.callEvent
+        return result
+    }
 
     /// The call event.
-    ///
-    /// The ObjC name must remain as-is for compatibility with legacy data
-    /// archived using Mantle. When this model was originally written (in ObjC),
-    /// the property was named `event` - therefore, Mantle will have used that
-    /// name as a key when doing its reflection-based archiving.
-    ///
-    /// - Note
-    /// Nullability here is intentional, since Mantle will set this property via
-    /// its reflection-based `init(coder:)` when we call `super.init(coder:)`.
-    @objc(event)
     private(set) var callEvent: OutgoingCallEvent!
 
     init(
         localThread: TSContactThread,
         event: OutgoingCallEvent,
-        tx: DBReadTransaction
+        tx: DBReadTransaction,
     ) {
         self.callEvent = event
         super.init(localThread: localThread, transaction: tx)
-    }
-
-    required public init?(coder: NSCoder) {
-        super.init(coder: coder)
-    }
-
-    required public init(dictionary dictionaryValue: [String: Any]!) throws {
-        try super.init(dictionary: dictionaryValue)
     }
 
     override public var isUrgent: Bool { false }
@@ -150,7 +163,7 @@ public class OutgoingCallEventSyncMessage: OWSOutgoingSyncMessage {
     }
 }
 
-fileprivate extension OutgoingCallEvent.CallType {
+private extension OutgoingCallEvent.CallType {
     var protoValue: SSKProtoSyncMessageCallEventType {
         switch self {
         case .audio:
@@ -165,7 +178,7 @@ fileprivate extension OutgoingCallEvent.CallType {
     }
 }
 
-fileprivate extension OutgoingCallEvent.EventDirection {
+private extension OutgoingCallEvent.EventDirection {
     var protoValue: SSKProtoSyncMessageCallEventDirection {
         switch self {
         case .incoming:
@@ -176,7 +189,7 @@ fileprivate extension OutgoingCallEvent.EventDirection {
     }
 }
 
-fileprivate extension OutgoingCallEvent.EventType {
+private extension OutgoingCallEvent.EventType {
     var protoValue: SSKProtoSyncMessageCallEventEvent {
         switch self {
         case .accepted:

@@ -20,12 +20,11 @@ public class ProvisioningSocket {
     let socket: SSKWebSocket
 
     public init(webSocketFactory: WebSocketFactory) {
-        // TODO: Should we (sometimes?) use the unidentified service?
         let request = WebSocketRequest(
-            signalService: .mainSignalServiceIdentified,
+            signalService: .mainSignalService,
             urlPath: "v1/websocket/provisioning/",
             urlQueryItems: [URLQueryItem(name: "agent", value: LinkingProvisioningMessage.Constants.userAgent)],
-            extraHeaders: [:]
+            extraHeaders: [:],
         )
         let webSocket = webSocketFactory.buildSocket(request: request, callbackScheduler: DispatchQueue.main)!
         self.socket = webSocket
@@ -50,7 +49,7 @@ public class ProvisioningSocket {
     public func connect() {
         if heartBeatTimer == nil {
             heartBeatTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-                guard let self = self else { return }
+                guard let self else { return }
                 guard self.state == .open else { return }
 
                 self.socket.writePing()

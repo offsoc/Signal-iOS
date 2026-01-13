@@ -129,7 +129,7 @@ public struct SendableAttachment {
                 asset,
                 from: startTime,
                 duration: segmentDuration,
-                totalDuration: cmDuration
+                totalDuration: cmDuration,
             ))
             startTime += segmentDuration
         }
@@ -147,7 +147,7 @@ public struct SendableAttachment {
         _ asset: AVURLAsset,
         from startTime: TimeInterval,
         duration: TimeInterval,
-        totalDuration: CMTime
+        totalDuration: CMTime,
     ) async throws -> URL {
         guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
             throw OWSAssertionError("Failed to start export session for segmentation")
@@ -156,7 +156,7 @@ public struct SendableAttachment {
         // tmp url is ok, it gets moved when converted to a Attachment later anyway.
         let outputUrl = OWSFileSystem.temporaryFileUrl(
             fileExtension: asset.url.pathExtension,
-            isAvailableWhileDeviceLocked: true
+            isAvailableWhileDeviceLocked: true,
         )
         exportSession.outputURL = outputUrl
         /// This is hardcoded here and in our media editor. That's in signalUI, so hard to link the two.
@@ -196,10 +196,7 @@ public struct SendableAttachment {
     }
 
     public func forSending(attachmentContentValidator: any AttachmentContentValidator) async throws -> ForSending {
-        let dataSource = try await attachmentContentValidator.validateContents(
-            sendableAttachment: self,
-            shouldUseDefaultFilename: true,
-        )
+        let dataSource = try await attachmentContentValidator.validateSendableAttachmentContents(self, shouldUseDefaultFilename: true)
         return ForSending(
             dataSource: dataSource,
             renderingFlag: self.renderingFlag,
@@ -208,15 +205,16 @@ public struct SendableAttachment {
 }
 
 extension AttachmentContentValidator {
-    public func validateContents(
-        sendableAttachment: SendableAttachment,
+    public func validateSendableAttachmentContents(
+        _ sendableAttachment: SendableAttachment,
         shouldUseDefaultFilename: Bool,
     ) async throws -> AttachmentDataSource {
-        return try await validateContents(
-            dataSource: sendableAttachment.dataSource,
+        let pendingAttachment = try await validateDataSourceContents(
+            sendableAttachment.dataSource,
             mimeType: sendableAttachment.mimeType,
             renderingFlag: sendableAttachment.renderingFlag,
             sourceFilename: sendableAttachment.sourceFilename?.rawValue ?? (shouldUseDefaultFilename ? sendableAttachment.defaultFilename : nil),
         )
+        return .pendingAttachment(pendingAttachment)
     }
 }

@@ -24,18 +24,17 @@ public protocol OWSSignalServiceProtocol: AnyObject {
         for signalServiceInfo: SignalServiceInfo,
         endpoint: OWSURLSessionEndpoint,
         configuration: URLSessionConfiguration?,
-        maxResponseSize: Int?
+        maxResponseSize: Int?,
     ) -> OWSURLSessionProtocol
 
     func sharedUrlSessionForCdn(
         cdnNumber: UInt32,
-        maxResponseSize: UInt?
+        maxResponseSize: UInt?,
     ) async -> OWSURLSessionProtocol
 }
 
 public enum SignalServiceType {
-    case mainSignalServiceIdentified
-    case mainSignalServiceUnidentified
+    case mainSignalService
     case storageService
     case updates
     case updates2
@@ -49,19 +48,19 @@ public extension OWSSignalServiceProtocol {
     private func buildUrlSession(
         for signalServiceType: SignalServiceType,
         configuration: URLSessionConfiguration? = nil,
-        maxResponseSize: Int? = nil
+        maxResponseSize: Int? = nil,
     ) -> OWSURLSessionProtocol {
         let signalServiceInfo = signalServiceType.signalServiceInfo()
         return buildUrlSession(
             for: signalServiceInfo,
             endpoint: buildUrlEndpoint(for: signalServiceInfo),
             configuration: configuration,
-            maxResponseSize: maxResponseSize
+            maxResponseSize: maxResponseSize,
         )
     }
 
     func urlSessionForMainSignalService() -> OWSURLSessionProtocol {
-        buildUrlSession(for: .mainSignalServiceIdentified)
+        buildUrlSession(for: .mainSignalService)
     }
 
     func urlSessionForStorageService() -> OWSURLSessionProtocol {
@@ -92,23 +91,14 @@ extension SignalServiceType {
 
     public func signalServiceInfo() -> SignalServiceInfo {
         switch self {
-        case .mainSignalServiceIdentified:
+        case .mainSignalService:
             return SignalServiceInfo(
-                baseUrl: URL(string: TSConstants.mainServiceIdentifiedURL)!,
+                baseUrl: URL(string: TSConstants.mainServiceURL)!,
                 censorshipCircumventionSupported: true,
                 censorshipCircumventionPathPrefix: TSConstants.serviceCensorshipPrefix,
                 shouldUseSignalCertificate: true,
                 shouldHandleRemoteDeprecation: true,
-                type: self
-            )
-        case .mainSignalServiceUnidentified:
-            return SignalServiceInfo(
-                baseUrl: URL(string: TSConstants.mainServiceUnidentifiedURL)!,
-                censorshipCircumventionSupported: true,
-                censorshipCircumventionPathPrefix: TSConstants.serviceCensorshipPrefix,
-                shouldUseSignalCertificate: true,
-                shouldHandleRemoteDeprecation: true,
-                type: self
+                type: self,
             )
         case .storageService:
             return SignalServiceInfo(
@@ -117,7 +107,7 @@ extension SignalServiceType {
                 censorshipCircumventionPathPrefix: TSConstants.storageServiceCensorshipPrefix,
                 shouldUseSignalCertificate: true,
                 shouldHandleRemoteDeprecation: true,
-                type: self
+                type: self,
             )
         case .updates:
             return SignalServiceInfo(
@@ -126,7 +116,7 @@ extension SignalServiceType {
                 censorshipCircumventionPathPrefix: "unimplemented",
                 shouldUseSignalCertificate: false,
                 shouldHandleRemoteDeprecation: false,
-                type: self
+                type: self,
             )
         case .updates2:
             return SignalServiceInfo(
@@ -135,7 +125,7 @@ extension SignalServiceType {
                 censorshipCircumventionPathPrefix: "unimplemented", // BADGES TODO
                 shouldUseSignalCertificate: true,
                 shouldHandleRemoteDeprecation: false,
-                type: self
+                type: self,
             )
         case .svr2:
             return SignalServiceInfo(
@@ -144,7 +134,7 @@ extension SignalServiceType {
                 censorshipCircumventionPathPrefix: TSConstants.svr2CensorshipPrefix,
                 shouldUseSignalCertificate: true,
                 shouldHandleRemoteDeprecation: false,
-                type: self
+                type: self,
             )
         }
     }

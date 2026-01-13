@@ -69,7 +69,7 @@ extension BackupArchive {
             /// Check, though, that the value didn't drift just in case.
             owsAssertBeta(
                 TSPrivateStoryThread.myStoryUniqueId == "00000000-0000-0000-0000-000000000000",
-                "My Story hardcoded id drifted; legacy backups may now be invalid"
+                "My Story hardcoded id drifted; legacy backups may now be invalid",
             )
             self.isMyStoryId = value.uuidString == TSPrivateStoryThread.myStoryUniqueId
         }
@@ -118,7 +118,7 @@ extension BackupArchive {
             return .init(
                 aci: localIdentifiers.aci,
                 pni: localIdentifiers.pni,
-                e164: E164(localIdentifiers.phoneNumber)
+                e164: E164(localIdentifiers.phoneNumber),
             )
         }
 
@@ -141,7 +141,7 @@ extension BackupArchive {
             localRecipientId: RecipientId,
             localSignalRecipientRowId: SignalRecipient.RowId,
             startTimestampMs: UInt64,
-            tx: DBReadTransaction
+            tx: DBReadTransaction,
         ) {
             self.localIdentifiers = localIdentifiers
             self.localRecipientId = localRecipientId
@@ -166,7 +166,7 @@ extension BackupArchive {
                 currentBackupAttachmentUploadEra: currentBackupAttachmentUploadEra,
                 includedContentFilter: includedContentFilter,
                 startTimestampMs: startTimestampMs,
-                tx: tx
+                tx: tx,
             )
         }
 
@@ -203,29 +203,26 @@ extension BackupArchive {
         }
 
         subscript(_ address: Address) -> RecipientId? {
-            // swiftlint:disable:next implicit_getter
-            get {
-                switch address {
-                case .releaseNotesChannel:
-                    return releaseNotesChannelRecipientId
-                case .group(let groupId):
-                    return groupIdMap[groupId]
-                case .distributionList(let distributionId):
-                    return distributionIdMap[distributionId]
-                case .contact(let contactAddress):
-                    // Go down identifiers in priority order, return the first we have.
-                    if let aci = contactAddress.aci {
-                        return contactAciMap[aci]
-                    } else if let e164 = contactAddress.e164 {
-                        return contactE164Map[e164]
-                    } else if let pni = contactAddress.pni {
-                        return contactPniMap[pni]
-                    } else {
-                        return nil
-                    }
-                case .callLink(let callLinkId):
-                    return callLinkIdMap[callLinkId]
+            switch address {
+            case .releaseNotesChannel:
+                return releaseNotesChannelRecipientId
+            case .group(let groupId):
+                return groupIdMap[groupId]
+            case .distributionList(let distributionId):
+                return distributionIdMap[distributionId]
+            case .contact(let contactAddress):
+                // Go down identifiers in priority order, return the first we have.
+                if let aci = contactAddress.aci {
+                    return contactAciMap[aci]
+                } else if let e164 = contactAddress.e164 {
+                    return contactE164Map[e164]
+                } else if let pni = contactAddress.pni {
+                    return contactPniMap[pni]
+                } else {
+                    return nil
                 }
+            case .callLink(let callLinkId):
+                return callLinkIdMap[callLinkId]
             }
         }
 
@@ -246,7 +243,7 @@ extension BackupArchive {
             forInteraction interaction: TSInteraction,
             file: StaticString = #file,
             function: StaticString = #function,
-            line: UInt = #line
+            line: UInt = #line,
         ) -> RecipientIdResult {
             let contactAddress = BackupArchive.ContactAddress(aci: aci)
 
@@ -257,7 +254,9 @@ extension BackupArchive {
             return .missing(.archiveFrameError(
                 .referencedRecipientIdMissing(.contact(contactAddress)),
                 BackupArchive.InteractionUniqueId(interaction: interaction),
-                file: file, function: function, line: line
+                file: file,
+                function: function,
+                line: line,
             ))
         }
     }
@@ -288,14 +287,14 @@ extension BackupArchive {
             startTimestampMs: UInt64,
             attachmentByteCounter: BackupArchiveAttachmentByteCounter,
             isPrimaryDevice: Bool,
-            tx: DBWriteTransaction
+            tx: DBWriteTransaction,
         ) {
             self.localIdentifiers = localIdentifiers
             super.init(
                 startTimestampMs: startTimestampMs,
                 attachmentByteCounter: attachmentByteCounter,
                 isPrimaryDevice: isPrimaryDevice,
-                tx: tx
+                tx: tx,
             )
         }
 

@@ -7,12 +7,48 @@ import Foundation
 
 // This needs to reflect the edit as represented (and sourced) from the db.
 @objc
-public class OutgoingEditMessage: TSOutgoingMessage {
+public final class OutgoingEditMessage: TSOutgoingMessage {
+    public required init?(coder: NSCoder) {
+        self.editedMessage = coder.decodeObject(of: TSOutgoingMessage.self, forKey: "editedMessage")
+        self.targetMessageTimestamp = coder.decodeObject(of: NSNumber.self, forKey: "targetMessageTimestamp")?.uint64Value ?? 0
+        super.init(coder: coder)
+    }
+
+    override public func encode(with coder: NSCoder) {
+        super.encode(with: coder)
+        if let editedMessage {
+            coder.encode(editedMessage, forKey: "editedMessage")
+        }
+        coder.encode(NSNumber(value: self.targetMessageTimestamp), forKey: "targetMessageTimestamp")
+    }
+
+    override public var hash: Int {
+        var hasher = Hasher()
+        hasher.combine(super.hash)
+        hasher.combine(editedMessage)
+        hasher.combine(targetMessageTimestamp)
+        return hasher.finalize()
+    }
+
+    override public func isEqual(_ object: Any?) -> Bool {
+        guard let object = object as? Self else { return false }
+        guard super.isEqual(object) else { return false }
+        guard self.editedMessage == object.editedMessage else { return false }
+        guard self.targetMessageTimestamp == object.targetMessageTimestamp else { return false }
+        return true
+    }
+
+    override public func copy(with zone: NSZone? = nil) -> Any {
+        let result = super.copy(with: zone) as! Self
+        result.editedMessage = self.editedMessage
+        result.targetMessageTimestamp = self.targetMessageTimestamp
+        return result
+    }
 
     // MARK: - Edit target data
 
     @objc
-    private(set) var editedMessage: TSOutgoingMessage
+    private(set) var editedMessage: TSOutgoingMessage?
 
     @objc
     private(set) var targetMessageTimestamp: UInt64 = 0
@@ -20,10 +56,10 @@ public class OutgoingEditMessage: TSOutgoingMessage {
     // MARK: - Overrides
 
     @objc
-    public override var shouldBeSaved: Bool { false }
+    override public var shouldBeSaved: Bool { false }
 
     @objc
-    public override var debugDescription: String { "editMessage" }
+    override public var debugDescription: String { "editMessage" }
 
     @objc
     override var shouldRecordSendLog: Bool { true }
@@ -38,79 +74,38 @@ public class OutgoingEditMessage: TSOutgoingMessage {
         thread: TSThread,
         targetMessageTimestamp: UInt64,
         editMessage: TSOutgoingMessage,
-        transaction: DBReadTransaction
+        transaction: DBReadTransaction,
     ) {
         self.targetMessageTimestamp = targetMessageTimestamp
         self.editedMessage = editMessage
 
         let builder: TSOutgoingMessageBuilder = .withDefaultValues(
             thread: thread,
-            timestamp: editMessage.timestamp
+            timestamp: editMessage.timestamp,
         )
         super.init(
             outgoingMessageWith: builder,
             additionalRecipients: [],
             explicitRecipients: [],
             skippedRecipients: [],
-            transaction: transaction
+            transaction: transaction,
         )
-    }
-
-    /// Note on `init?(coder:)` and `init(dictionary:)`: Both are implemented as seeming
-    /// no-ops here and initialize `editMessage` to an empty value. However, these methods
-    /// are subtly important.
-    ///
-    /// 1. `OutgoingEditMessage` is a subclass of `TSOutgoingMessage`, which is in turn,
-    ///   an ancestor of `MTLModel`.  `MTLModel` uses  both of these methods to provide
-    ///   reflection based encoding/decoding of it's subclasses, which is used when serializing
-    ///   messages into the MessageSendingQueue
-    ///
-    /// 2. Since this is Swift, once a custom initializer is added, Swift requires implementing any
-    ///   required initializers.
-    ///
-    /// So, long story short, these empty methods keep the compiler happy, while allowing the
-    /// `MTLModel` base class to properly serialize `OutgoingEditMessage` and all it's
-    /// inherited properties
-    @objc
-    required init?(coder: NSCoder) {
-        // Placeholder message to appease the compiler.  The message
-        do {
-            self.editedMessage = try TSOutgoingMessage(dictionary: [:])
-        } catch {
-            owsFailDebug("Failed to create placeholder message")
-            return nil
-        }
-
-        super.init(coder: coder)
-    }
-
-    @objc
-    required init(dictionary dictionaryValue: [String: Any]!) throws {
-
-        do {
-            self.editedMessage = try TSOutgoingMessage(dictionary: [:])
-        } catch {
-            owsFailDebug("Failed to create placeholder message")
-            throw error
-        }
-
-        try super.init(dictionary: dictionaryValue)
     }
 
     // MARK: - Builders
 
-    public override func contentBuilder(
+    override public func contentBuilder(
         thread: TSThread,
-        transaction: DBReadTransaction
+        transaction tx: DBReadTransaction,
     ) -> SSKProtoContentBuilder? {
 
         let editBuilder = SSKProtoEditMessage.builder()
         let contentBuilder = SSKProtoContent.builder()
 
-        guard let targetDataMessageBuilder = editedMessage.dataMessageBuilder(
-            with: thread,
-            transaction: transaction
-        ) else {
+        guard
+            let editedMessage,
+            let targetDataMessageBuilder = editedMessage.dataMessageBuilder(with: thread, transaction: tx)
+        else {
             owsFailDebug("failed to build outgoing edit data message")
             return nil
         }
@@ -128,19 +123,19 @@ public class OutgoingEditMessage: TSOutgoingMessage {
         }
     }
 
-    public override func dataMessageBuilder(
+    override public func dataMessageBuilder(
         with thread: TSThread,
-        transaction: DBReadTransaction
+        transaction: DBReadTransaction,
     ) -> SSKProtoDataMessageBuilder? {
-        editedMessage.dataMessageBuilder(
+        return editedMessage?.dataMessageBuilder(
             with: thread,
-            transaction: transaction
+            transaction: transaction,
         )
     }
 
-    public override func buildTranscriptSyncMessage(
+    override public func buildTranscriptSyncMessage(
         localThread: TSContactThread,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) -> OWSOutgoingSyncMessage? {
         guard let thread = thread(tx: transaction) else {
             owsFailDebug("Missing thread for interaction.")
@@ -152,30 +147,28 @@ public class OutgoingEditMessage: TSOutgoingMessage {
             messageThread: thread,
             outgoingMessage: self,
             isRecipientUpdate: false,
-            transaction: transaction
+            transaction: transaction,
         )
         return transcript
     }
 
-    /// This override is required to properly update the correct interaction row when delivery
-    /// receipts are processed.   Without this, the deliviery is registered against the
-    /// OutgoingEditMessage, which doesn't have a backing entry in the interactions table.
-    /// Instead, when updating this message, ensure that the `recipientAddressStates` are
-    /// in sync between the OutgoingEditMesasge and it's wrapped TSOutgoingMessage
-    public override func anyUpdateOutgoingMessage(
-        transaction: DBWriteTransaction,
-        block: (TSOutgoingMessage) -> Void
+    /// This override is required to properly update the correct interaction row
+    /// when delivery receipts are processed. Without this, the delivery is
+    /// registered against the OutgoingEditMessage, which doesn't have a backing
+    /// entry in the interactions table. Instead, when updating this message,
+    /// ensure that the `recipientAddressStates` are in sync between the
+    /// OutgoingEditMessage and its wrapped TSOutgoingMessage.
+    override public func anyUpdateOutgoingMessage(
+        transaction tx: DBWriteTransaction,
+        block: (TSOutgoingMessage) -> Void,
     ) {
-        super.anyUpdateOutgoingMessage(transaction: transaction, block: block)
+        super.anyUpdateOutgoingMessage(transaction: tx, block: block)
 
-        if let editedMessage = TSOutgoingMessage.anyFetchOutgoingMessage(
-            uniqueId: editedMessage.uniqueId,
-            transaction: transaction
-        ) {
-            editedMessage.anyUpdateOutgoingMessage(
-                transaction: transaction,
-                block: block
-            )
+        if
+            let editedMessage,
+            let editedMessage = TSOutgoingMessage.anyFetchOutgoingMessage(uniqueId: editedMessage.uniqueId, transaction: tx)
+        {
+            editedMessage.anyUpdateOutgoingMessage(transaction: tx, block: block)
         }
     }
 }

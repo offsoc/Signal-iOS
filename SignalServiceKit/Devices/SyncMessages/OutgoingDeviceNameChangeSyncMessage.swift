@@ -7,26 +7,47 @@
 /// should refresh their list of linked devices.
 @objc(OutgoingDeviceNameChangeSyncMessage)
 public class OutgoingDeviceNameChangeSyncMessage: OWSOutgoingSyncMessage {
+    public required init?(coder: NSCoder) {
+        self.deviceId = coder.decodeObject(of: NSNumber.self, forKey: "deviceId")
+        super.init(coder: coder)
+    }
 
-    /// Exposed and nullable for compatibility with Mantle.
-    @objc(deviceId)
+    override public func encode(with coder: NSCoder) {
+        super.encode(with: coder)
+        if let deviceId {
+            coder.encode(deviceId, forKey: "deviceId")
+        }
+    }
+
+    override public var hash: Int {
+        var hasher = Hasher()
+        hasher.combine(super.hash)
+        hasher.combine(deviceId)
+        return hasher.finalize()
+    }
+
+    override public func isEqual(_ object: Any?) -> Bool {
+        guard let object = object as? Self else { return false }
+        guard super.isEqual(object) else { return false }
+        guard self.deviceId == object.deviceId else { return false }
+        return true
+    }
+
+    override public func copy(with zone: NSZone? = nil) -> Any {
+        let result = super.copy(with: zone) as! Self
+        result.deviceId = self.deviceId
+        return result
+    }
+
     private(set) var deviceId: NSNumber!
 
     init(
         deviceId: UInt32,
         localThread: TSContactThread,
-        tx: DBReadTransaction
+        tx: DBReadTransaction,
     ) {
         self.deviceId = NSNumber(value: deviceId)
         super.init(localThread: localThread, transaction: tx)
-    }
-
-    required public init?(coder: NSCoder) {
-        super.init(coder: coder)
-    }
-
-    required public init(dictionary dictionaryValue: [String: Any]!) throws {
-        try super.init(dictionary: dictionaryValue)
     }
 
     override public var isUrgent: Bool { false }

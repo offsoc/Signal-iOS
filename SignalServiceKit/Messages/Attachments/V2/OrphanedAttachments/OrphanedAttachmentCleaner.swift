@@ -31,17 +31,17 @@ public protocol OrphanedAttachmentCleaner {
     ///
     /// Return the id which can be used to release the pending attachment.
     func commitPendingAttachment(
-        _ record: OrphanedAttachmentRecord
-    ) async throws -> OrphanedAttachmentRecord.IDType
+        _ insertableRecord: OrphanedAttachmentRecord.InsertableRecord,
+    ) async -> OrphanedAttachmentRecord.RowId
 
     /// See commitPendingAttachmentWithSneakyTransaction; does the same thing for
     /// multiple orphan records at once, keyed as chosen by the caller.
     func commitPendingAttachments<Key: Hashable>(
-        _ records: [Key: OrphanedAttachmentRecord]
-    ) async throws -> [Key: OrphanedAttachmentRecord.IDType]
+        _ insertableRecords: [Key: OrphanedAttachmentRecord.InsertableRecord],
+    ) async -> [Key: OrphanedAttachmentRecord.RowId]
 
     /// Un-marks a pending attachment for deletion IFF currently marked for deletion.
-    /// 
+    ///
     /// If the id is not found, throws an error.
     /// Why? Here is the expected sequence:
     /// 1. Reserve attachment file locations (assign random file UUIDs)
@@ -61,8 +61,8 @@ public protocol OrphanedAttachmentCleaner {
     /// There is never a case where step 5 succeeds but we have deleted files,
     /// or step 5 fails but we didn't delete the files.
     func releasePendingAttachment(
-        withId: OrphanedAttachmentRecord.IDType,
-        tx: DBWriteTransaction
+        withId: OrphanedAttachmentRecord.RowId,
+        tx: DBWriteTransaction,
     )
 }
 
@@ -79,14 +79,14 @@ public class OrphanedAttachmentCleanerImpl: OrphanedAttachmentCleaner {
         self.init(
             db: db,
             fileSystem: Wrappers.OWSFileSystem(),
-            taskScheduler: Wrappers.TaskScheduler()
+            taskScheduler: Wrappers.TaskScheduler(),
         )
     }
 
-    internal init(
+    init(
         db: DB,
         fileSystem: Shims.OWSFileSystem,
-        taskScheduler: Shims.TaskScheduler
+        taskScheduler: Shims.TaskScheduler,
     ) {
         self.db = db
         self.taskScheduler = taskScheduler
@@ -94,9 +94,9 @@ public class OrphanedAttachmentCleanerImpl: OrphanedAttachmentCleaner {
             jobRunner: JobRunner(
                 db: db,
                 fileSystem: fileSystem,
-                cleaner: self
+                cleaner: self,
             ),
-            taskScheduler: taskScheduler
+            taskScheduler: taskScheduler,
         )
     }
 
@@ -114,28 +114,22 @@ public class OrphanedAttachmentCleanerImpl: OrphanedAttachmentCleaner {
     }
 
     public func commitPendingAttachment(
-        _ record: OrphanedAttachmentRecord
-    ) async throws -> OrphanedAttachmentRecord.IDType {
+        _ insertableRecord: OrphanedAttachmentRecord.InsertableRecord,
+    ) async -> OrphanedAttachmentRecord.RowId {
         let id = UUID()
-        return try await commitPendingAttachments([id: record])[id]!
+        return await commitPendingAttachments([id: insertableRecord])[id]!
     }
 
     public func commitPendingAttachments<Key: Hashable>(
-        _ records: [Key: OrphanedAttachmentRecord]
-    ) async throws -> [Key: OrphanedAttachmentRecord.IDType] {
-        return try await db.awaitableWrite { tx in
-            var results = [Key: OrphanedAttachmentRecord.IDType]()
-            for (key, record) in records {
-                guard record.sqliteId == nil else {
-                    throw OWSAssertionError("Reinserting existing record")
-                }
+        _ insertableRecords: [Key: OrphanedAttachmentRecord.InsertableRecord],
+    ) async -> [Key: OrphanedAttachmentRecord.RowId] {
+        return await db.awaitableWrite { tx in
+            var results = [Key: OrphanedAttachmentRecord.RowId]()
+            for (key, insertableRecord) in insertableRecords {
                 // Ensure we mark this attachment as pending.
-                var record = record
-                record.isPendingAttachment = true
-                try record.insert(tx.database)
-                guard let id = record.sqliteId else {
-                    throw OWSAssertionError("Unable to insert")
-                }
+                owsPrecondition(insertableRecord.isPendingAttachment, "must be pending")
+                let record = OrphanedAttachmentRecord.insertRecord(insertableRecord, tx: tx)
+                let id = record.id
                 skippedRowIds.update(block: { $0.insert(id) })
                 results[key] = id
             }
@@ -143,14 +137,14 @@ public class OrphanedAttachmentCleanerImpl: OrphanedAttachmentCleaner {
         }
     }
 
-    public func releasePendingAttachment(withId id: OrphanedAttachmentRecord.IDType, tx: DBWriteTransaction) {
+    public func releasePendingAttachment(withId id: OrphanedAttachmentRecord.RowId, tx: DBWriteTransaction) {
         let db = tx.database
-        let foundRecord = try! OrphanedAttachmentRecord.fetchOne(db, key: id)
+        let foundRecord = failIfThrows { try OrphanedAttachmentRecord.fetchOne(db, key: id) }
         guard let foundRecord else {
             owsFailDebug("Pending attachment not marked for deletion")
             return
         }
-        try! foundRecord.delete(db)
+        failIfThrows { try foundRecord.delete(db) }
 
         // Remove from skipped row ids.
         // This isn't critical; now that the row is gone skipping the id does nothing.
@@ -163,7 +157,7 @@ public class OrphanedAttachmentCleanerImpl: OrphanedAttachmentCleaner {
     // We keep this in memory; we will retry on next app launch.
     //
     // Should only be accessed from within a write transaction.
-    fileprivate var skippedRowIds = AtomicValue<Set<OrphanedAttachmentRecord.IDType>>.init(Set(), lock: .init())
+    fileprivate var skippedRowIds = AtomicValue<Set<OrphanedAttachmentRecord.RowId>>(Set(), lock: .init())
 
     private actor JobRunner {
 
@@ -176,7 +170,7 @@ public class OrphanedAttachmentCleanerImpl: OrphanedAttachmentCleaner {
         init(
             db: DB,
             fileSystem: Shims.OWSFileSystem,
-            cleaner: OrphanedAttachmentCleanerImpl
+            cleaner: OrphanedAttachmentCleanerImpl,
         ) {
             self.db = db
             self.fileSystem = fileSystem
@@ -231,8 +225,7 @@ public class OrphanedAttachmentCleanerImpl: OrphanedAttachmentCleaner {
                 }
                 if
                     let skippedRowIds = cleaner?.skippedRowIds,
-                    let nextRecordId = nextRecord.sqliteId,
-                    skippedRowIds.get().contains(nextRecordId)
+                    skippedRowIds.get().contains(nextRecord.id)
                 {
                     Logger.info("Skipping a marked-as-skipped row id")
                     return
@@ -246,7 +239,7 @@ public class OrphanedAttachmentCleanerImpl: OrphanedAttachmentCleaner {
                     return
                 } catch {
                     Logger.error("Failed to clean up orphan table row: \(error)")
-                    let skipId = nextRecord.sqliteId!
+                    let skipId = nextRecord.id
                     cleaner?.skippedRowIds.update(block: { $0.insert(skipId) })
                 }
             }
@@ -256,22 +249,22 @@ public class OrphanedAttachmentCleanerImpl: OrphanedAttachmentCleaner {
         }
 
         private func fetchNextOrphanRecord() -> OrphanedAttachmentRecord? {
-            return db.read { tx in
+            return db.read { tx -> OrphanedAttachmentRecord? in
                 guard let skippedRowIds = cleaner?.skippedRowIds.get(), !skippedRowIds.isEmpty else {
                     return try? OrphanedAttachmentRecord.fetchOne(tx.database)
                 }
-                let rowIdColumn = Column(OrphanedAttachmentRecord.CodingKeys.sqliteId)
+                let rowIdColumn = Column(OrphanedAttachmentRecord.CodingKeys.id)
                 var query: QueryInterfaceRequest<OrphanedAttachmentRecord>?
 
-                let skippedRowIdsForQuery: any Collection<OrphanedAttachmentRecord.IDType>
-                let skippedRowIdsForInMemoryFilter: any Collection<OrphanedAttachmentRecord.IDType>
+                let skippedRowIdsForQuery: any Collection<OrphanedAttachmentRecord.RowId>
+                let skippedRowIdsForInMemoryFilter: any Collection<OrphanedAttachmentRecord.RowId>
                 if skippedRowIds.count > 50 {
                     Logger.warn("Too many skipped row ids!")
                     (
                         skippedRowIdsForQuery,
-                        skippedRowIdsForInMemoryFilter
+                        skippedRowIdsForInMemoryFilter,
                     ) = skippedRowIds.split(
-                        at: skippedRowIds.index(skippedRowIds.startIndex, offsetBy: 50)
+                        at: skippedRowIds.index(skippedRowIds.startIndex, offsetBy: 50),
                     )
                 } else {
                     skippedRowIdsForQuery = skippedRowIds
@@ -290,7 +283,7 @@ public class OrphanedAttachmentCleanerImpl: OrphanedAttachmentCleaner {
                 } else {
                     let cursor = try? query?.fetchCursor(tx.database)
                     while let next = try? cursor?.next() {
-                        if !skippedRowIdsForInMemoryFilter.contains(next.sqliteId!) {
+                        if !skippedRowIdsForInMemoryFilter.contains(next.id) {
                             return next
                         }
                     }
@@ -304,7 +297,7 @@ public class OrphanedAttachmentCleanerImpl: OrphanedAttachmentCleaner {
                 record.localRelativeFilePath,
                 record.localRelativeFilePathThumbnail,
                 record.localRelativeFilePathAudioWaveform,
-                record.localRelativeFilePathVideoStillFrame
+                record.localRelativeFilePathVideoStillFrame,
             ].compacted()
 
             try relativeFilePaths.forEach { relativeFilePath in
@@ -317,7 +310,7 @@ public class OrphanedAttachmentCleanerImpl: OrphanedAttachmentCleaner {
                 for quality in AttachmentThumbnailQuality.allCases {
                     let cacheFileUrl = AttachmentThumbnailQuality.thumbnailCacheFileUrl(
                         attachmentLocalRelativeFilePath: localRelativeFilePath,
-                        at: quality
+                        at: quality,
                     )
                     try fileSystem.deleteFileIfExists(url: cacheFileUrl)
                 }
@@ -334,7 +327,7 @@ public class OrphanedAttachmentCleanerImpl: OrphanedAttachmentCleaner {
 
         init(
             jobRunner: JobRunner,
-            taskScheduler: Shims.TaskScheduler
+            taskScheduler: Shims.TaskScheduler,
         ) {
             self.jobRunner = jobRunner
             self.taskScheduler = taskScheduler
@@ -380,6 +373,7 @@ extension OrphanedAttachmentCleanerImpl {
         public typealias OWSFileSystem = _OrphanedAttachmentCleanerImpl_OWSFileSystemShim
         public typealias TaskScheduler = _OrphanedAttachmentCleanerImpl_TaskSchedulerShim
     }
+
     public enum Wrappers {
         public typealias OWSFileSystem = _OrphanedAttachmentCleanerImpl_OWSFileSystemWrapper
         public typealias TaskScheduler = _OrphanedAttachmentCleanerImpl_TaskSchedulerWrapper

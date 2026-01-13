@@ -32,13 +32,14 @@ public class DependenciesBridge {
 
         return _shared
     }
+
     private static var _shared: DependenciesBridge?
 
-    #if TESTABLE_BUILD
+#if TESTABLE_BUILD
     static var hasShared: Bool {
         return _shared != nil
     }
-    #endif
+#endif
 
     static func setShared(_ dependenciesBridge: DependenciesBridge?, isRunningTests: Bool) {
         owsPrecondition((_shared == nil && dependenciesBridge != nil) || isRunningTests)
@@ -84,6 +85,7 @@ public class DependenciesBridge {
     public let backupSubscriptionManager: BackupSubscriptionManager
     public let backupTestFlightEntitlementManager: BackupTestFlightEntitlementManager
     public let badgeCountFetcher: BadgeCountFetcher
+    let blockedRecipientStore: BlockedRecipientStore
     public let callLinkStore: any CallLinkRecordStore
     public let callRecordDeleteManager: any CallRecordDeleteManager
     public let callRecordMissedCallManager: CallRecordMissedCallManager
@@ -224,6 +226,7 @@ public class DependenciesBridge {
         backupSubscriptionManager: BackupSubscriptionManager,
         backupTestFlightEntitlementManager: BackupTestFlightEntitlementManager,
         badgeCountFetcher: BadgeCountFetcher,
+        blockedRecipientStore: BlockedRecipientStore,
         callLinkStore: any CallLinkRecordStore,
         callRecordDeleteManager: CallRecordDeleteManager,
         callRecordMissedCallManager: CallRecordMissedCallManager,
@@ -322,7 +325,7 @@ public class DependenciesBridge {
         usernameLookupManager: UsernameLookupManager,
         usernameValidationManager: UsernameValidationManager,
         wallpaperImageStore: WallpaperImageStore,
-        wallpaperStore: WallpaperStore
+        wallpaperStore: WallpaperStore,
     ) {
         self.accountAttributesUpdater = accountAttributesUpdater
         self.accountEntropyPoolManager = accountEntropyPoolManager
@@ -363,6 +366,7 @@ public class DependenciesBridge {
         self.backupSubscriptionManager = backupSubscriptionManager
         self.backupTestFlightEntitlementManager = backupTestFlightEntitlementManager
         self.badgeCountFetcher = badgeCountFetcher
+        self.blockedRecipientStore = blockedRecipientStore
         self.callLinkStore = callLinkStore
         self.callRecordDeleteManager = callRecordDeleteManager
         self.callRecordMissedCallManager = callRecordMissedCallManager

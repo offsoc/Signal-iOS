@@ -6,15 +6,43 @@
 import Foundation
 
 class OutgoingPollTerminateMessage: TSOutgoingMessage {
+    required init?(coder: NSCoder) {
+        self.targetPollTimestamp = coder.decodeObject(of: NSNumber.self, forKey: "targetPollTimestamp")?.uint64Value ?? 0
+        super.init(coder: coder)
+    }
 
-    @objc
+    override func encode(with coder: NSCoder) {
+        super.encode(with: coder)
+        coder.encode(NSNumber(value: self.targetPollTimestamp), forKey: "targetPollTimestamp")
+    }
+
+    override var hash: Int {
+        var hasher = Hasher()
+        hasher.combine(super.hash)
+        hasher.combine(targetPollTimestamp)
+        return hasher.finalize()
+    }
+
+    override func isEqual(_ object: Any?) -> Bool {
+        guard let object = object as? Self else { return false }
+        guard super.isEqual(object) else { return false }
+        guard self.targetPollTimestamp == object.targetPollTimestamp else { return false }
+        return true
+    }
+
+    override func copy(with zone: NSZone? = nil) -> Any {
+        let result = super.copy(with: zone) as! Self
+        result.targetPollTimestamp = self.targetPollTimestamp
+        return result
+    }
+
     var targetPollTimestamp: UInt64 = 0
 
-    public init(
+    init(
         thread: TSGroupThread,
         targetPollTimestamp: UInt64,
         expiresInSeconds: UInt32 = 0,
-        tx: DBReadTransaction
+        tx: DBReadTransaction,
     ) {
         self.targetPollTimestamp = targetPollTimestamp
         let builder: TSOutgoingMessageBuilder = .withDefaultValues(
@@ -27,30 +55,24 @@ class OutgoingPollTerminateMessage: TSOutgoingMessage {
             additionalRecipients: [],
             explicitRecipients: [],
             skippedRecipients: [],
-            transaction: tx
+            transaction: tx,
         )
     }
 
-    required public init?(coder: NSCoder) {
-        super.init(coder: coder)
-    }
-
-    required public init(dictionary dictionaryValue: [String: Any]!) throws {
-        try super.init(dictionary: dictionaryValue)
-    }
-
-    override public var shouldBeSaved: Bool { false }
+    override var shouldBeSaved: Bool { false }
 
     override var contentHint: SealedSenderContentHint { .implicit }
 
-    override public func dataMessageBuilder(
+    override func dataMessageBuilder(
         with thread: TSThread,
-        transaction: DBReadTransaction
+        transaction: DBReadTransaction,
     ) -> SSKProtoDataMessageBuilder? {
-        guard let dataMessageBuilder = super.dataMessageBuilder(
-            with: thread,
-            transaction: transaction
-        ) else {
+        guard
+            let dataMessageBuilder = super.dataMessageBuilder(
+                with: thread,
+                transaction: transaction,
+            )
+        else {
             return nil
         }
 
@@ -59,15 +81,15 @@ class OutgoingPollTerminateMessage: TSOutgoingMessage {
         pollTerminateBuilder.setTargetSentTimestamp(targetPollTimestamp)
 
         dataMessageBuilder.setPollTerminate(
-            pollTerminateBuilder.buildInfallibly()
+            pollTerminateBuilder.buildInfallibly(),
         )
 
         return dataMessageBuilder
     }
 
-    public override func updateWithAllSendingRecipientsMarkedAsFailed(
+    override func updateWithAllSendingRecipientsMarkedAsFailed(
         error: (any Error)? = nil,
-        transaction tx: DBWriteTransaction
+        transaction tx: DBWriteTransaction,
     ) {
         super.updateWithAllSendingRecipientsMarkedAsFailed(error: error, transaction: tx)
 
@@ -85,12 +107,13 @@ class OutgoingPollTerminateMessage: TSOutgoingMessage {
         Logger.error("Failed to send poll terminate to all recipients.")
 
         do {
-            guard let targetMessage = try DependenciesBridge.shared.interactionStore.fetchMessage(
-                timestamp: targetPollTimestamp,
-                incomingMessageAuthor: nil,
-                transaction: tx
-            ),
-                  let interactionId = targetMessage.grdbId?.int64Value
+            guard
+                let targetMessage = try DependenciesBridge.shared.interactionStore.fetchMessage(
+                    timestamp: targetPollTimestamp,
+                    incomingMessageAuthor: nil,
+                    transaction: tx,
+                ),
+                let interactionId = targetMessage.grdbId?.int64Value
             else {
                 Logger.error("Can't find target poll")
                 return

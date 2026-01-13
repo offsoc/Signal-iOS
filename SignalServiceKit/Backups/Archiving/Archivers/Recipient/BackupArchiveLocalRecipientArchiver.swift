@@ -27,7 +27,7 @@ public class BackupArchiveLocalRecipientArchiver: BackupArchiveProtoStreamWriter
     public init(
         avatarDefaultColorManager: AvatarDefaultColorManager,
         profileManager: BackupArchive.Shims.ProfileManager,
-        recipientStore: BackupArchiveRecipientStore
+        recipientStore: BackupArchiveRecipientStore,
     ) {
         self.avatarDefaultColorManager = avatarDefaultColorManager
         self.profileManager = profileManager
@@ -39,26 +39,26 @@ public class BackupArchiveLocalRecipientArchiver: BackupArchiveProtoStreamWriter
         stream: BackupArchiveProtoOutputStream,
         bencher: BackupArchive.Bencher,
         localIdentifiers: LocalIdentifiers,
-        tx: DBReadTransaction
+        tx: DBReadTransaction,
     ) -> BackupArchive.ArchiveLocalRecipientResult {
         return bencher.processFrame { frameBencher in
             let defaultAvatarColor: AvatarTheme
             if let localRecipient = recipientStore.fetchRecipient(localIdentifiers: localIdentifiers, tx: tx) {
                 defaultAvatarColor = avatarDefaultColorManager.defaultColor(
                     useCase: .contact(recipient: localRecipient),
-                    tx: tx
+                    tx: tx,
                 )
             } else {
                 defaultAvatarColor = avatarDefaultColorManager.defaultColor(
                     useCase: .contactWithoutRecipient(address: localIdentifiers.aciAddress),
-                    tx: tx
+                    tx: tx,
                 )
             }
 
             let error = Self.writeFrameToStream(
                 stream,
                 objectId: BackupArchive.LocalRecipientId(),
-                frameBencher: frameBencher
+                frameBencher: frameBencher,
             ) {
                 var selfRecipient = BackupProto_Self()
                 selfRecipient.avatarColor = defaultAvatarColor.asBackupProtoAvatarColor
@@ -82,7 +82,7 @@ public class BackupArchiveLocalRecipientArchiver: BackupArchiveProtoStreamWriter
 
     func fetchLocalRecipientRowId(
         localIdentifiers: LocalIdentifiers,
-        tx: DBReadTransaction
+        tx: DBReadTransaction,
     ) -> SignalRecipient.RowId? {
         return recipientStore.fetchRecipient(localIdentifiers: localIdentifiers, tx: tx)?.id
     }
@@ -91,11 +91,11 @@ public class BackupArchiveLocalRecipientArchiver: BackupArchiveProtoStreamWriter
     public func restoreSelfRecipient(
         _ selfRecipientProto: BackupProto_Self,
         recipient: BackupProto_Recipient,
-        context: BackupArchive.RecipientRestoringContext
+        context: BackupArchive.RecipientRestoringContext,
     ) -> BackupArchive.RestoreLocalRecipientResult {
         context[recipient.recipientId] = .localAddress
 
-        let localSignalRecipient: SignalRecipient
+        var localSignalRecipient: SignalRecipient
         do throws(GRDB.DatabaseError) {
             localSignalRecipient = try SignalRecipient.insertRecord(
                 aci: context.localIdentifiers.aci,
@@ -118,16 +118,16 @@ public class BackupArchiveLocalRecipientArchiver: BackupArchiveProtoStreamWriter
                 try avatarDefaultColorManager.persistDefaultColor(
                     defaultColor,
                     recipientRowId: localSignalRecipient.id,
-                    tx: context.tx
+                    tx: context.tx,
                 )
             } catch {
                 return .failure([.restoreFrameError(.databaseInsertionFailed(error), recipient.recipientId)])
             }
         }
 
-        profileManager.addToWhitelist(
-            context.localIdentifiers.aciAddress,
-            tx: context.tx
+        profileManager.addRecipientToProfileWhitelist(
+            &localSignalRecipient,
+            tx: context.tx,
         )
 
         return .success

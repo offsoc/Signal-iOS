@@ -7,18 +7,71 @@ import Foundation
 import LibSignalClient
 
 public class OutgoingStoryMessage: TSOutgoingMessage {
-    @objc
-    public private(set) var storyMessageId: String!
+    public required init?(coder: NSCoder) {
+        self._storyMessageRowId = coder.decodeObject(of: NSNumber.self, forKey: "_storyMessageRowId")
+        self.isPrivateStorySend = coder.decodeObject(of: NSNumber.self, forKey: "isPrivateStorySend")
+        self.skipSyncTranscript = coder.decodeObject(of: NSNumber.self, forKey: "skipSyncTranscript")
+        self.storyAllowsReplies = coder.decodeObject(of: NSNumber.self, forKey: "storyAllowsReplies")
+        self.storyMessageId = coder.decodeObject(of: NSString.self, forKey: "storyMessageId") as String?
+        super.init(coder: coder)
+    }
 
-    @objc
+    override public func encode(with coder: NSCoder) {
+        super.encode(with: coder)
+        if let _storyMessageRowId {
+            coder.encode(_storyMessageRowId, forKey: "_storyMessageRowId")
+        }
+        if let isPrivateStorySend {
+            coder.encode(isPrivateStorySend, forKey: "isPrivateStorySend")
+        }
+        if let skipSyncTranscript {
+            coder.encode(skipSyncTranscript, forKey: "skipSyncTranscript")
+        }
+        if let storyAllowsReplies {
+            coder.encode(storyAllowsReplies, forKey: "storyAllowsReplies")
+        }
+        if let storyMessageId {
+            coder.encode(storyMessageId, forKey: "storyMessageId")
+        }
+    }
+
+    override public var hash: Int {
+        var hasher = Hasher()
+        hasher.combine(super.hash)
+        hasher.combine(_storyMessageRowId)
+        hasher.combine(isPrivateStorySend)
+        hasher.combine(skipSyncTranscript)
+        hasher.combine(storyAllowsReplies)
+        hasher.combine(storyMessageId)
+        return hasher.finalize()
+    }
+
+    override public func isEqual(_ object: Any?) -> Bool {
+        guard let object = object as? Self else { return false }
+        guard super.isEqual(object) else { return false }
+        guard self._storyMessageRowId == object._storyMessageRowId else { return false }
+        guard self.isPrivateStorySend == object.isPrivateStorySend else { return false }
+        guard self.skipSyncTranscript == object.skipSyncTranscript else { return false }
+        guard self.storyAllowsReplies == object.storyAllowsReplies else { return false }
+        guard self.storyMessageId == object.storyMessageId else { return false }
+        return true
+    }
+
+    override public func copy(with zone: NSZone? = nil) -> Any {
+        let result = super.copy(with: zone) as! Self
+        result._storyMessageRowId = self._storyMessageRowId
+        result.isPrivateStorySend = self.isPrivateStorySend
+        result.skipSyncTranscript = self.skipSyncTranscript
+        result.storyAllowsReplies = self.storyAllowsReplies
+        result.storyMessageId = self.storyMessageId
+        return result
+    }
+
+    public private(set) var storyMessageId: String!
     public private(set) var _storyMessageRowId: NSNumber!
     public var storyMessageRowId: Int64! { _storyMessageRowId?.int64Value }
-
-    @objc
     public private(set) var storyAllowsReplies: NSNumber!
-    @objc
     public private(set) var isPrivateStorySend: NSNumber!
-    @objc
     public private(set) var skipSyncTranscript: NSNumber!
 
     public init(
@@ -28,7 +81,7 @@ public class OutgoingStoryMessage: TSOutgoingMessage {
         storyAllowsReplies: Bool,
         isPrivateStorySend: Bool,
         skipSyncTranscript: Bool,
-        transaction: DBReadTransaction
+        transaction: DBReadTransaction,
     ) {
         self.storyMessageId = storyMessage.uniqueId
         self._storyMessageRowId = NSNumber(value: storyMessageRowId)
@@ -37,14 +90,14 @@ public class OutgoingStoryMessage: TSOutgoingMessage {
         self.skipSyncTranscript = NSNumber(value: skipSyncTranscript)
         let builder: TSOutgoingMessageBuilder = .withDefaultValues(
             thread: thread,
-            timestamp: storyMessage.timestamp
+            timestamp: storyMessage.timestamp,
         )
         super.init(
             outgoingMessageWith: builder,
             additionalRecipients: [],
             explicitRecipients: [],
             skippedRecipients: [],
-            transaction: transaction
+            transaction: transaction,
         )
     }
 
@@ -54,7 +107,7 @@ public class OutgoingStoryMessage: TSOutgoingMessage {
         storyMessage: StoryMessage,
         storyMessageRowId: Int64,
         skipSyncTranscript: Bool = false,
-        transaction: DBReadTransaction
+        transaction: DBReadTransaction,
     ) {
         let storyAllowsReplies = (thread as? TSPrivateStoryThread)?.allowsReplies ?? true
         let isPrivateStorySend = thread is TSPrivateStoryThread
@@ -65,28 +118,20 @@ public class OutgoingStoryMessage: TSOutgoingMessage {
             storyAllowsReplies: storyAllowsReplies,
             isPrivateStorySend: isPrivateStorySend,
             skipSyncTranscript: skipSyncTranscript,
-            transaction: transaction
+            transaction: transaction,
         )
     }
 
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-    }
-
-    required init(dictionary dictionaryValue: [String: Any]!) throws {
-        try super.init(dictionary: dictionaryValue)
-    }
-
     @objc
-    public override var isUrgent: Bool { false }
+    override public var isUrgent: Bool { false }
 
-    public override var isStorySend: Bool { true }
+    override public var isStorySend: Bool { true }
 
-    public override func shouldSyncTranscript() -> Bool { !skipSyncTranscript.boolValue }
+    override public func shouldSyncTranscript() -> Bool { !skipSyncTranscript.boolValue }
 
-    public override func buildTranscriptSyncMessage(
+    override public func buildTranscriptSyncMessage(
         localThread: TSContactThread,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) -> OWSOutgoingSyncMessage? {
         guard let storyMessage = StoryMessage.anyFetch(uniqueId: storyMessageId, transaction: transaction) else {
             owsFailDebug("Missing story message")
@@ -96,17 +141,17 @@ public class OutgoingStoryMessage: TSOutgoingMessage {
         return OutgoingStorySentMessageTranscript(
             localThread: localThread,
             storyMessage: storyMessage,
-            transaction: transaction
+            transaction: transaction,
         )
     }
 
     @objc
-    public override var shouldBeSaved: Bool { false }
+    override public var shouldBeSaved: Bool { false }
     override var contentHint: SealedSenderContentHint { .implicit }
 
-    public override func contentBuilder(
+    override public func contentBuilder(
         thread: TSThread,
-        transaction: DBReadTransaction
+        transaction: DBReadTransaction,
     ) -> SSKProtoContentBuilder? {
         guard let storyMessage = storyMessageProto(with: thread, transaction: transaction) else {
             owsFailDebug("Missing story message proto")
@@ -119,8 +164,10 @@ public class OutgoingStoryMessage: TSOutgoingMessage {
 
     @objc
     public func storyMessageProto(with thread: TSThread, transaction: DBReadTransaction) -> SSKProtoStoryMessage? {
-        guard let storyMessageId = storyMessageId,
-              let storyMessage = StoryMessage.anyFetch(uniqueId: storyMessageId, transaction: transaction) else {
+        guard
+            let storyMessageId,
+            let storyMessage = StoryMessage.anyFetch(uniqueId: storyMessageId, transaction: transaction)
+        else {
             Logger.warn("Missing story message for outgoing story.")
             return nil
         }
@@ -132,9 +179,9 @@ public class OutgoingStoryMessage: TSOutgoingMessage {
         case .media:
             guard
                 let storyMessageRowId = storyMessage.id,
-                let attachment = DependenciesBridge.shared.attachmentStore.fetchFirstReferencedAttachment(
+                let attachment = DependenciesBridge.shared.attachmentStore.fetchAnyReferencedAttachment(
                     for: .storyMessageMedia(storyMessageRowId: storyMessageRowId),
-                    tx: transaction
+                    tx: transaction,
                 ),
                 let pointer = attachment.attachment.asTransitTierPointer(),
                 case let .digestSHA256Ciphertext(digestSHA256Ciphertext) = pointer.info.integrityCheck
@@ -145,18 +192,20 @@ public class OutgoingStoryMessage: TSOutgoingMessage {
             let attachmentProto = DependenciesBridge.shared.attachmentManager.buildProtoForSending(
                 from: attachment.reference,
                 pointer: pointer,
-                digestSHA256Ciphertext: digestSHA256Ciphertext
+                digestSHA256Ciphertext: digestSHA256Ciphertext,
             )
             builder.setFileAttachment(attachmentProto)
             if let storyMediaCaption = attachment.reference.storyMediaCaption {
                 builder.setBodyRanges(storyMediaCaption.toProtoBodyRanges())
             }
         case .text(let attachment):
-            guard let attachmentProto = try? attachment.buildProto(
-                parentStoryMessage: storyMessage,
-                bodyRangeHandler: builder.setBodyRanges(_:),
-                transaction: transaction
-            ) else {
+            guard
+                let attachmentProto = try? attachment.buildProto(
+                    parentStoryMessage: storyMessage,
+                    bodyRangeHandler: builder.setBodyRanges(_:),
+                    transaction: transaction,
+                )
+            else {
                 owsFailDebug("Missing attachment for outgoing story message")
                 return nil
             }
@@ -177,14 +226,14 @@ public class OutgoingStoryMessage: TSOutgoingMessage {
         }
     }
 
-    public override func anyUpdateOutgoingMessage(transaction: DBWriteTransaction, block: (TSOutgoingMessage) -> Void) {
+    override public func anyUpdateOutgoingMessage(transaction: DBWriteTransaction, block: (TSOutgoingMessage) -> Void) {
         super.anyUpdateOutgoingMessage(transaction: transaction, block: block)
 
         guard
-            let storyMessageId = storyMessageId,
+            let storyMessageId,
             let storyMessage = StoryMessage.anyFetch(
                 uniqueId: storyMessageId,
-                transaction: transaction
+                transaction: transaction,
             )
         else {
             owsFailDebug("Missing story message for outgoing story message")
@@ -204,7 +253,7 @@ public class OutgoingStoryMessage: TSOutgoingMessage {
     public static func createDedupedOutgoingMessages(
         for storyMessage: StoryMessage,
         sendingTo threads: [TSPrivateStoryThread],
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) -> [OutgoingStoryMessage] {
 
         class OutgoingMessageBuilder {
@@ -252,7 +301,7 @@ public class OutgoingStoryMessage: TSOutgoingMessage {
             messageBuilders.append(builderForCurrentThread)
         }
 
-        let outgoingMessages = messageBuilders.enumerated().map { (index, builder) in
+        let outgoingMessages = messageBuilders.enumerated().map { index, builder in
             let message = OutgoingStoryMessage(
                 thread: builder.thread,
                 storyMessage: storyMessage,
@@ -261,7 +310,7 @@ public class OutgoingStoryMessage: TSOutgoingMessage {
                 isPrivateStorySend: true,
                 // Only send one sync transcript, even if we're sending to multiple threads
                 skipSyncTranscript: index > 0,
-                transaction: tx
+                transaction: tx,
             )
             let skippedRecipients = builder.skippedRecipientIds.map {
                 return recipientDatabaseTable.fetchRecipient(rowId: $0, tx: tx)!.address

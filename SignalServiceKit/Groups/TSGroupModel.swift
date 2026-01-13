@@ -8,41 +8,120 @@ import Foundation
 public import LibSignalClient
 
 @objc
-public class TSGroupModelV2: TSGroupModel {
-    @objc
+public final class TSGroupModelV2: TSGroupModel {
+    public required init?(coder: NSCoder) {
+        self.access = coder.decodeObject(of: GroupAccess.self, forKey: "access") ?? .defaultForV2
+        self.avatarDataFailedToFetchFromCDN = coder.decodeObject(of: NSNumber.self, forKey: "avatarDataFailedToFetchFromCDN")?.boolValue ?? false
+        self.avatarUrlPath = coder.decodeObject(of: NSString.self, forKey: "avatarUrlPath") as String?
+        self.descriptionText = coder.decodeObject(of: NSString.self, forKey: "descriptionText") as String?
+        self.didJustAddSelfViaGroupLink = coder.decodeObject(of: NSNumber.self, forKey: "didJustAddSelfViaGroupLink")?.boolValue ?? false
+        self.inviteLinkPassword = coder.decodeObject(of: NSData.self, forKey: "inviteLinkPassword") as Data?
+        self.isAnnouncementsOnly = coder.decodeObject(of: NSNumber.self, forKey: "isAnnouncementsOnly")?.boolValue ?? false
+        self.isJoinRequestPlaceholder = coder.decodeObject(of: NSNumber.self, forKey: "isPlaceholderModel")?.boolValue ?? false
+        self.lowTrustAvatarDownloadWasBlocked = coder.decodeObject(of: NSNumber.self, forKey: "lowTrustAvatarDownloadWasBlocked")?.boolValue ?? false
+        self.membership = coder.decodeObject(of: GroupMembership.self, forKey: "membership") ?? .empty
+        self.revision = coder.decodeObject(of: NSNumber.self, forKey: "revision")?.uint32Value ?? 0
+        self.secretParamsData = coder.decodeObject(of: NSData.self, forKey: "secretParamsData") as Data? ?? Data()
+        self.wasJustMigrated = coder.decodeObject(of: NSNumber.self, forKey: "wasJustMigrated")?.boolValue ?? false
+        super.init(coder: coder)
+    }
+
+    override public func encode(with coder: NSCoder) {
+        super.encode(with: coder)
+        coder.encode(self.access, forKey: "access")
+        coder.encode(NSNumber(value: self.avatarDataFailedToFetchFromCDN), forKey: "avatarDataFailedToFetchFromCDN")
+        if let avatarUrlPath {
+            coder.encode(avatarUrlPath, forKey: "avatarUrlPath")
+        }
+        if let descriptionText {
+            coder.encode(descriptionText, forKey: "descriptionText")
+        }
+        coder.encode(NSNumber(value: self.didJustAddSelfViaGroupLink), forKey: "didJustAddSelfViaGroupLink")
+        if let inviteLinkPassword {
+            coder.encode(inviteLinkPassword, forKey: "inviteLinkPassword")
+        }
+        coder.encode(NSNumber(value: self.isAnnouncementsOnly), forKey: "isAnnouncementsOnly")
+        coder.encode(NSNumber(value: self.isJoinRequestPlaceholder), forKey: "isPlaceholderModel")
+        coder.encode(NSNumber(value: self.lowTrustAvatarDownloadWasBlocked), forKey: "lowTrustAvatarDownloadWasBlocked")
+        coder.encode(self.membership, forKey: "membership")
+        coder.encode(NSNumber(value: self.revision), forKey: "revision")
+        coder.encode(self.secretParamsData, forKey: "secretParamsData")
+        coder.encode(NSNumber(value: self.wasJustMigrated), forKey: "wasJustMigrated")
+    }
+
+    override public var hash: Int {
+        var hasher = Hasher()
+        hasher.combine(super.hash)
+        hasher.combine(access)
+        hasher.combine(avatarDataFailedToFetchFromCDN)
+        hasher.combine(avatarUrlPath)
+        hasher.combine(descriptionText)
+        hasher.combine(didJustAddSelfViaGroupLink)
+        hasher.combine(inviteLinkPassword)
+        hasher.combine(isAnnouncementsOnly)
+        hasher.combine(isJoinRequestPlaceholder)
+        hasher.combine(lowTrustAvatarDownloadWasBlocked)
+        hasher.combine(membership)
+        hasher.combine(revision)
+        hasher.combine(secretParamsData)
+        hasher.combine(wasJustMigrated)
+        return hasher.finalize()
+    }
+
+    override public func isEqual(_ object: Any?) -> Bool {
+        guard let object = object as? Self else { return false }
+        guard super.isEqual(object) else { return false }
+        guard self.access == object.access else { return false }
+        guard self.avatarDataFailedToFetchFromCDN == object.avatarDataFailedToFetchFromCDN else { return false }
+        guard self.avatarUrlPath == object.avatarUrlPath else { return false }
+        guard self.descriptionText == object.descriptionText else { return false }
+        guard self.didJustAddSelfViaGroupLink == object.didJustAddSelfViaGroupLink else { return false }
+        guard self.inviteLinkPassword == object.inviteLinkPassword else { return false }
+        guard self.isAnnouncementsOnly == object.isAnnouncementsOnly else { return false }
+        guard self.isJoinRequestPlaceholder == object.isJoinRequestPlaceholder else { return false }
+        guard self.lowTrustAvatarDownloadWasBlocked == object.lowTrustAvatarDownloadWasBlocked else { return false }
+        guard self.membership == object.membership else { return false }
+        guard self.revision == object.revision else { return false }
+        guard self.secretParamsData == object.secretParamsData else { return false }
+        guard self.wasJustMigrated == object.wasJustMigrated else { return false }
+        return true
+    }
+
+    override public func copy(with zone: NSZone? = nil) -> Any {
+        let result = super.copy(with: zone) as! Self
+        result.access = self.access
+        result.avatarDataFailedToFetchFromCDN = self.avatarDataFailedToFetchFromCDN
+        result.avatarUrlPath = self.avatarUrlPath
+        result.descriptionText = self.descriptionText
+        result.didJustAddSelfViaGroupLink = self.didJustAddSelfViaGroupLink
+        result.inviteLinkPassword = self.inviteLinkPassword
+        result.isAnnouncementsOnly = self.isAnnouncementsOnly
+        result.isJoinRequestPlaceholder = self.isJoinRequestPlaceholder
+        result.lowTrustAvatarDownloadWasBlocked = self.lowTrustAvatarDownloadWasBlocked
+        result.membership = self.membership
+        result.revision = self.revision
+        result.secretParamsData = self.secretParamsData
+        result.wasJustMigrated = self.wasJustMigrated
+        return result
+    }
+
     var membership: GroupMembership
-    @objc
-    public var access: GroupAccess = .defaultForV2
-    @objc
-    public var secretParamsData: Data = Data()
-    @objc
-    public var revision: UInt32 = 0
-    @objc
+    public var access: GroupAccess
+    public var secretParamsData: Data
+    public var revision: UInt32
     public var avatarUrlPath: String?
-    @objc
     public var inviteLinkPassword: Data?
-    @objc
-    public var isAnnouncementsOnly: Bool = false
-    @objc
+    public var isAnnouncementsOnly: Bool
     public var descriptionText: String?
 
     /// Whether this group model is a placeholder for a group we've requested to
     /// join, but don't yet have access to on the service. Other fields on this
     /// group model may not be populated.
-    ///
-    /// - Important
-    /// The @objc name must remain as-is, so as to correctly deserialize
-    /// existing models that were ``NSKeyedArchiver``-ed in the past.
-    @objc(isPlaceholderModel)
-    public var isJoinRequestPlaceholder: Bool = false
-    @objc
-    public var wasJustMigrated: Bool = false
-    @objc
-    public var didJustAddSelfViaGroupLink: Bool = false
+    public var isJoinRequestPlaceholder: Bool
+    public var wasJustMigrated: Bool
+    public var didJustAddSelfViaGroupLink: Bool
 
-    @objc
     public var avatarDataFailedToFetchFromCDN: Bool = false
-    @objc
     public var lowTrustAvatarDownloadWasBlocked: Bool = false
 
     public init(
@@ -60,7 +139,7 @@ public class TSGroupModelV2: TSGroupModel {
         isJoinRequestPlaceholder: Bool,
         wasJustMigrated: Bool,
         didJustAddSelfViaGroupLink: Bool,
-        addedByAddress: SignalServiceAddress?
+        addedByAddress: SignalServiceAddress?,
     ) {
         self.descriptionText = descriptionText
         self.membership = groupMembership
@@ -93,7 +172,7 @@ public class TSGroupModelV2: TSGroupModel {
             name: name,
             avatarData: avatarData,
             members: [],
-            addedBy: addedByAddress
+            addedBy: addedByAddress,
         )
     }
 
@@ -128,47 +207,25 @@ public class TSGroupModelV2: TSGroupModel {
         return url
     }
 
-    // MARK: - MTLModel
-
-    @objc
-    required public init?(coder aDecoder: NSCoder) {
-        self.membership = .empty
-        super.init(coder: aDecoder)
-    }
-
-    @objc
-    public required init(dictionary dictionaryValue: [String: Any]!) throws {
-        self.membership = .empty
-        try super.init(dictionary: dictionaryValue)
-    }
-
-    public override class func storageBehaviorForProperty(withKey propertyKey: String) -> MTLPropertyStorage {
-        if propertyKey == #keyPath(groupMembers) {
-            // This is included in groupMembership.
-            return MTLPropertyStorageNone
-        }
-        return super.storageBehaviorForProperty(withKey: propertyKey)
-    }
-
     // MARK: -
 
     @objc
-    public override var groupsVersion: GroupsVersion {
+    override public var groupsVersion: GroupsVersion {
         return .V2
     }
 
     @objc
-    public override var groupMembership: GroupMembership {
+    override public var groupMembership: GroupMembership {
         return membership
     }
 
     @objc
-    public override var groupMembers: [SignalServiceAddress] {
+    override public var groupMembers: [SignalServiceAddress] {
         return Array(groupMembership.fullMembers)
     }
 
     public func hasUserFacingChangeCompared(
-        to otherGroupModel: TSGroupModelV2
+        to otherGroupModel: TSGroupModelV2,
     ) -> Bool {
         if self === otherGroupModel {
             return false
@@ -204,7 +261,7 @@ public class TSGroupModelV2: TSGroupModel {
     }
 
     @objc
-    public override var debugDescription: String {
+    override public var debugDescription: String {
         var result = "["
         result += "groupId: \(groupId.hexadecimalString),\n"
         result += "groupsVersion: \(groupsVersion),\n"
@@ -230,8 +287,10 @@ public class TSGroupModelV2: TSGroupModel {
 
     @objc
     public var groupInviteLinkMode: GroupsV2LinkMode {
-        guard let inviteLinkPassword = inviteLinkPassword,
-              !inviteLinkPassword.isEmpty else {
+        guard
+            let inviteLinkPassword,
+            !inviteLinkPassword.isEmpty
+        else {
             return .disabled
         }
 
@@ -247,9 +306,11 @@ public class TSGroupModelV2: TSGroupModel {
 
     @objc
     public var isGroupInviteLinkEnabled: Bool {
-        if let inviteLinkPassword = inviteLinkPassword,
-           !inviteLinkPassword.isEmpty,
-           access.canJoinFromInviteLink {
+        if
+            let inviteLinkPassword,
+            !inviteLinkPassword.isEmpty,
+            access.canJoinFromInviteLink
+        {
             return true
         }
         return false
@@ -330,10 +391,10 @@ extension TSGroupModel {
         guard let metadata = DataImageSource(imageData).imageMetadata() else {
             return false
         }
-        return (
+        return
             metadata.pixelSize.height <= CGFloat(kMaxAvatarDimension)
-            && metadata.pixelSize.width <= CGFloat(kMaxAvatarDimension)
-        )
+                && metadata.pixelSize.width <= CGFloat(kMaxAvatarDimension)
+
     }
 
     public static func dataForGroupAvatar(_ image: UIImage) -> Data? {
@@ -453,7 +514,7 @@ extension TSGroupModel {
     public static let avatarsDirectory = URL(
         fileURLWithPath: "GroupAvatars",
         isDirectory: true,
-        relativeTo: URL(fileURLWithPath: OWSFileSystem.appSharedDataDirectoryPath())
+        relativeTo: URL(fileURLWithPath: OWSFileSystem.appSharedDataDirectoryPath()),
     )
 
     public static func hash(forAvatarData avatarData: Data) throws -> String {
@@ -463,7 +524,7 @@ extension TSGroupModel {
     public static func allGroupAvatarFilePaths(transaction: DBReadTransaction) throws -> Set<String> {
         let cursor = TSThread.grdbFetchCursor(
             sql: "SELECT * FROM \(ThreadRecord.databaseTableName) WHERE \(threadColumn: .recordType) = \(SDSRecordType.groupThread.rawValue)",
-            transaction: transaction
+            transaction: transaction,
         )
 
         var filePaths = Set<String>()

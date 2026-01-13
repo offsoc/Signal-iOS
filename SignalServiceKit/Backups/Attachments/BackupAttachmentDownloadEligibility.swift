@@ -54,30 +54,30 @@ public struct BackupAttachmentDownloadEligibility {
         currentTimestamp: UInt64,
         backupPlan: BackupPlan,
         remoteConfig: RemoteConfig,
-        isPrimaryDevice: Bool
+        isPrimaryDevice: Bool,
     ) -> Self {
         return forAttachment(
             attachment,
-            attachmentTimestamp: downloadRecord.maxOwnerTimestamp,
+            mostRecentReferenceTimestamp: downloadRecord.maxOwnerTimestamp,
             currentTimestamp: currentTimestamp,
             backupPlan: backupPlan,
             remoteConfig: remoteConfig,
-            isPrimaryDevice: isPrimaryDevice
+            isPrimaryDevice: isPrimaryDevice,
         )
     }
 
     static func forAttachment(
         _ attachment: Attachment,
-        reference: @autoclosure () throws -> AttachmentReference,
+        mostRecentReference: AttachmentReference,
         currentTimestamp: UInt64,
         backupPlan: BackupPlan,
         remoteConfig: RemoteConfig,
-        isPrimaryDevice: Bool
-    ) rethrows -> Self {
-        return try forAttachment(
+        isPrimaryDevice: Bool,
+    ) -> BackupAttachmentDownloadEligibility {
+        return forAttachment(
             attachment,
-            attachmentTimestamp: try {
-                switch try reference().owner {
+            mostRecentReferenceTimestamp: {
+                switch mostRecentReference.owner {
                 case .message(let messageSource):
                     return messageSource.receivedAtTimestamp
                 case .thread, .storyMessage:
@@ -87,60 +87,48 @@ public struct BackupAttachmentDownloadEligibility {
             currentTimestamp: currentTimestamp,
             backupPlan: backupPlan,
             remoteConfig: remoteConfig,
-            isPrimaryDevice: isPrimaryDevice
+            isPrimaryDevice: isPrimaryDevice,
         )
     }
 
     private static func forAttachment(
         _ attachment: Attachment,
-        attachmentTimestamp getAttachmentTimestamp: @autoclosure () throws -> UInt64?,
+        mostRecentReferenceTimestamp: UInt64?,
         currentTimestamp: UInt64,
         backupPlan: BackupPlan,
         remoteConfig: RemoteConfig,
-        isPrimaryDevice: Bool
-    ) rethrows -> Self {
+        isPrimaryDevice: Bool,
+    ) -> BackupAttachmentDownloadEligibility {
         if attachment.asStream() != nil {
             // If we have a stream already, no need to download anything.
-            return Self(
+            return BackupAttachmentDownloadEligibility(
                 thumbnailMediaTierState: .done,
                 fullsizeTransitTierState: .done,
-                fullsizeMediaTierState: .done
+                fullsizeMediaTierState: .done,
             )
         }
 
-        var cachedAttachmentTimestamp: UInt64?? = .none
-        func cached(_ block: () throws -> UInt64?) rethrows -> UInt64? {
-            switch cachedAttachmentTimestamp {
-            case .none:
-                let value = try block()
-                cachedAttachmentTimestamp = value
-                return value
-            case .some(let value):
-                return value
-            }
-        }
-
-        return Self(
-            thumbnailMediaTierState: try Self.mediaTierThumbnailState(
+        return BackupAttachmentDownloadEligibility(
+            thumbnailMediaTierState: mediaTierThumbnailState(
                 attachment: attachment,
                 backupPlan: backupPlan,
-                attachmentTimestamp: { try cached(getAttachmentTimestamp) }(),
+                mostRecentReferenceTimestamp: mostRecentReferenceTimestamp,
                 currentTimestamp: currentTimestamp,
             ),
-            fullsizeTransitTierState: try Self.transitTierFullsizeState(
+            fullsizeTransitTierState: transitTierFullsizeState(
                 attachment: attachment,
-                attachmentTimestamp: { try cached(getAttachmentTimestamp) }(),
+                mostRecentReferenceTimestamp: mostRecentReferenceTimestamp,
                 currentTimestamp: currentTimestamp,
                 remoteConfig: remoteConfig,
                 backupPlan: backupPlan,
-                isPrimaryDevice: isPrimaryDevice
+                isPrimaryDevice: isPrimaryDevice,
             ),
-            fullsizeMediaTierState: try Self.mediaTierFullsizeState(
+            fullsizeMediaTierState: mediaTierFullsizeState(
                 attachment: attachment,
-                attachmentTimestamp: { try cached(getAttachmentTimestamp) }(),
+                mostRecentReferenceTimestamp: mostRecentReferenceTimestamp,
                 currentTimestamp: currentTimestamp,
-                backupPlan: backupPlan
-            )
+                backupPlan: backupPlan,
+            ),
         )
     }
 
@@ -148,10 +136,10 @@ public struct BackupAttachmentDownloadEligibility {
     /// (As opposed to ineligible, which just means the current backup plan prevents download).
     static func mediaTierFullsizeState(
         attachment: Attachment,
-        attachmentTimestamp getAttachmentTimestamp: @autoclosure () throws -> UInt64?,
+        mostRecentReferenceTimestamp: UInt64?,
         currentTimestamp: UInt64,
-        backupPlan: BackupPlan
-    ) rethrows -> QueuedBackupAttachmentDownload.State? {
+        backupPlan: BackupPlan,
+    ) -> QueuedBackupAttachmentDownload.State? {
         guard attachment.asStream() == nil else {
             return .done
         }
@@ -178,27 +166,21 @@ public struct BackupAttachmentDownloadEligibility {
             // but for eligibility purposes "free" is the same as paid with optimize off.
             return .ready
         case
-                .paid(optimizeLocalStorage: false),
-                .paidExpiringSoon(optimizeLocalStorage: false),
-                .paidAsTester(optimizeLocalStorage: false):
+            .paid(optimizeLocalStorage: false),
+            .paidExpiringSoon(optimizeLocalStorage: false),
+            .paidAsTester(optimizeLocalStorage: false):
             // Everything is eligible for download when optimize is off.
             return .ready
-
         case
-                .paid(optimizeLocalStorage: true),
-                .paidExpiringSoon(optimizeLocalStorage: true),
-                .paidAsTester(optimizeLocalStorage: true):
-            guard let attachmentTimestamp = try getAttachmentTimestamp() else {
-                // Nil timestamps are used for thread wallpapers, which we never offload.
-                return .ready
-            }
-            // Note that we don't use `Attachment.shouldBeOffloaded` because this check is subtly different.
-            // shouldBeOffloaded is concerned with whether to offload a stream we already downloaded so it
-            // returns false for non-streams and it checks last viewed time.
-            // This is by definition a pointer, not a stream, and therefore can't be viewed. The only
-            // criteria we care about is the age of the attachment.
-            let wouldBeOffloaded = attachmentTimestamp + Attachment.offloadingThresholdMs < currentTimestamp
-            if wouldBeOffloaded {
+            .paid(optimizeLocalStorage: true),
+            .paidExpiringSoon(optimizeLocalStorage: true),
+            .paidAsTester(optimizeLocalStorage: true):
+            if
+                let mostRecentReferenceTimestamp,
+                mostRecentReferenceTimestamp + Attachment.offloadingThresholdMs < currentTimestamp
+            {
+                // This attachment would be offloaded based on its age, so don't
+                // bother downloading it.
                 return .ineligible
             } else {
                 return .ready
@@ -211,9 +193,9 @@ public struct BackupAttachmentDownloadEligibility {
     static func mediaTierThumbnailState(
         attachment: Attachment,
         backupPlan: BackupPlan,
-        attachmentTimestamp getAttachmentTimestamp: @autoclosure () throws -> UInt64?,
+        mostRecentReferenceTimestamp: UInt64?,
         currentTimestamp: UInt64,
-    ) rethrows -> QueuedBackupAttachmentDownload.State? {
+    ) -> QueuedBackupAttachmentDownload.State? {
         if attachment.mediaName == nil {
             return nil
         }
@@ -236,7 +218,11 @@ public struct BackupAttachmentDownloadEligibility {
         switch backupPlan {
         case .disabled, .disabling:
             return .ineligible
-        case .free:
+        case
+            .free,
+            .paid(optimizeLocalStorage: false),
+            .paidExpiringSoon(optimizeLocalStorage: false),
+            .paidAsTester(optimizeLocalStorage: false):
             // free tier and optimize off dont download thumbnails by default;
             // only download if the fullsize download failed.
             if attachment.mediaTierInfo?.lastDownloadAttemptTimestamp != nil {
@@ -244,29 +230,18 @@ public struct BackupAttachmentDownloadEligibility {
             }
             return .ineligible
         case
-                .paid(let optimizeLocalStorage),
-                .paidAsTester(let optimizeLocalStorage),
-                .paidExpiringSoon(let optimizeLocalStorage):
-            // free tier and optimize off dont download thumbnails by default;
-            // only download if the fullsize download failed.
+            .paid(optimizeLocalStorage: true),
+            .paidExpiringSoon(optimizeLocalStorage: true),
+            .paidAsTester(optimizeLocalStorage: true):
+
             if
-                !optimizeLocalStorage,
-                attachment.mediaTierInfo?.lastDownloadAttemptTimestamp != nil
+                let mostRecentReferenceTimestamp,
+                mostRecentReferenceTimestamp <= currentTimestamp - Attachment.offloadingThresholdMs
             {
                 return .ready
+            } else {
+                return .ineligible
             }
-
-            // Nil timestamps are used for thread wallpapers, which we consider
-            // infinitely recent.
-            let attachmentTimestamp = try getAttachmentTimestamp() ?? currentTimestamp
-            if
-                optimizeLocalStorage,
-                attachmentTimestamp <= currentTimestamp - Attachment.offloadingThresholdMs
-            {
-                return .ready
-            }
-
-            return .ineligible
         }
     }
 
@@ -274,12 +249,12 @@ public struct BackupAttachmentDownloadEligibility {
     /// (As opposed to ineligible, which just means the current backup plan prevents download).
     static func transitTierFullsizeState(
         attachment: Attachment,
-        attachmentTimestamp getAttachmentTimestamp: @autoclosure () throws -> UInt64?,
+        mostRecentReferenceTimestamp: UInt64?,
         currentTimestamp: UInt64,
         remoteConfig: RemoteConfig,
         backupPlan: BackupPlan,
-        isPrimaryDevice: Bool
-    ) rethrows -> QueuedBackupAttachmentDownload.State? {
+        isPrimaryDevice: Bool,
+    ) -> QueuedBackupAttachmentDownload.State? {
         guard attachment.asStream() == nil else {
             return .done
         }
@@ -309,7 +284,10 @@ public struct BackupAttachmentDownloadEligibility {
             // try the received timestamp.
             if transitTierInfo.uploadTimestamp + remoteConfig.messageQueueTimeMs > currentTimestamp {
                 return .ready
-            } else if try getAttachmentTimestamp() ?? 0 + remoteConfig.messageQueueTimeMs > currentTimestamp {
+            } else if
+                let mostRecentReferenceTimestamp,
+                mostRecentReferenceTimestamp + remoteConfig.messageQueueTimeMs > currentTimestamp
+            {
                 return .ready
             } else {
                 return nil

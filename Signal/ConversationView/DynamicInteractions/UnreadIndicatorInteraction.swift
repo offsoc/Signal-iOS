@@ -7,22 +7,17 @@ public import SignalServiceKit
 
 public class UnreadIndicatorInteraction: TSInteraction {
 
-    public override var isDynamicInteraction: Bool {
+    override public var isDynamicInteraction: Bool {
         true
     }
 
-    public override var interactionType: OWSInteractionType {
+    override public var interactionType: OWSInteractionType {
         .unreadIndicator
     }
 
     @available(*, unavailable, message: "use other constructor instead.")
-    public required init(coder aDecoder: NSCoder) {
+    public required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    @available(*, unavailable, message: "use other constructor instead.")
-    public required init(dictionary dictionaryValue: [String: Any]!) throws {
-        fatalError("init(dictionary:) has not been implemented")
     }
 
     public init(thread: TSThread, timestamp: UInt64, receivedAtTimestamp: UInt64) {
@@ -32,15 +27,15 @@ public class UnreadIndicatorInteraction: TSInteraction {
             customUniqueId: "UnreadIndicator_\(timestamp)",
             timestamp: timestamp,
             receivedAtTimestamp: receivedAtTimestamp,
-            thread: thread
+            thread: thread,
         )
     }
 
-    public override var shouldBeSaved: Bool {
+    override public var shouldBeSaved: Bool {
         return false
     }
 
-    public override func anyWillInsert(with transaction: DBWriteTransaction) {
+    override public func anyWillInsert(with transaction: DBWriteTransaction) {
         owsFailDebug("The transient interaction should not be saved in the database.")
     }
 }

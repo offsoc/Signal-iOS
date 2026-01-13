@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+@import Foundation;
+
 #import <SignalServiceKit/BaseModel.h>
 #import <SignalServiceKit/StickerInfo.h>
 
@@ -11,7 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 @class DBWriteTransaction;
 @class StickerPack;
 
-@interface StickerPackItem : MTLModel
+@interface StickerPackItem : NSObject <NSCoding, NSCopying>
 
 @property (nonatomic, readonly) UInt32 stickerId;
 @property (nonatomic, readonly) NSString *emojiString;
@@ -27,7 +29,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 #pragma mark -
 
-@interface StickerPack : BaseModel
+@interface StickerPack : BaseModel <NSCopying>
 
 @property (nonatomic, readonly) StickerPackInfo *info;
 
@@ -47,7 +49,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (instancetype)new NS_UNAVAILABLE;
 - (instancetype)init NS_UNAVAILABLE;
-- (nullable instancetype)initWithCoder:(NSCoder *)coder NS_DESIGNATED_INITIALIZER;
+- (nullable instancetype)initWithCoder:(NSCoder *)coder NS_UNAVAILABLE;
 - (instancetype)initWithUniqueId:(NSString *)uniqueId NS_UNAVAILABLE;
 - (instancetype)initWithGrdbId:(int64_t)grdbId uniqueId:(NSString *)uniqueId NS_UNAVAILABLE;
 

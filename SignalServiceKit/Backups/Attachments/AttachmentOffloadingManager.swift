@@ -15,7 +15,7 @@ extension Attachment {
 
     /// How long we keep attachment files locally after viewing them when "optimize local storage"
     /// is enabled.
-    private static var offloadingViewThresholdMs: UInt64 {
+    fileprivate static var offloadingViewThresholdMs: UInt64 {
         if offloadingThresholdOverride { return 0 }
         return .dayInMs * 7
     }
@@ -27,58 +27,9 @@ extension Attachment {
             UserDefaults.standard.set(newValue, forKey: "offloadingThresholdOverride")
         }
     }
-
-    /// Returns true if the given attachment should be offloaded (have its local file(s) deleted)
-    /// because it has met the criteria to be stored exclusively in the backup media tier.
-    public func shouldBeOffloaded(
-        shouldOptimizeLocalStorage: Bool,
-        currentUploadEra: String,
-        currentTimestamp: UInt64,
-        mostRecentReference: @autoclosure () throws -> AttachmentReference,
-        tx: DBReadTransaction
-    ) throws -> Bool {
-        guard shouldOptimizeLocalStorage else {
-            // Don't offload anything unless this setting is enabled.
-            return false
-        }
-        guard self.asStream() != nil else {
-            // We only offload stuff we have locally, duh.
-            return false
-        }
-        guard
-            let mediaTierInfo = self.mediaTierInfo,
-            mediaTierInfo.isUploaded(currentUploadEra: currentUploadEra)
-        else {
-            // Don't offload until we've backed up to media tier.
-            // Note that attachments that are ineligible for media tier upload
-            // (some DMs, view-once, oversized text) won't be uploaded and therefore
-            // won't pass this check. We don't need to also check for "eligibility"
-            // here and can just rely on upload mechanisms to have checked that.
-            return false
-        }
-        if
-            let viewedTimestamp = self.lastFullscreenViewTimestamp,
-            viewedTimestamp + Self.offloadingViewThresholdMs > currentTimestamp
-        {
-            // Don't offload if viewed recently.
-            return false
-        }
-
-        // Lastly find the most recent owner and use its timestamp to determine
-        // eligibility to offload.
-        switch try mostRecentReference().owner {
-        case .message(let messageSource):
-            return messageSource.receivedAtTimestamp + Self.offloadingThresholdMs < currentTimestamp
-        case .storyMessage:
-            // Story messages expire on their own; never offload
-            // any attachment owned by a story message.
-            return false
-        case .thread:
-            // We never offload thread wallpapers.
-            return false
-        }
-    }
 }
+
+// MARK: -
 
 public protocol AttachmentOffloadingManager {
 
@@ -161,16 +112,16 @@ public class AttachmentOffloadingManagerImpl: AttachmentOffloadingManager {
     // Returns nil if finished.
     private func offloadNextBatch(
         startTimeMs: UInt64,
-        lastAttachmentId: Attachment.IDType?
+        lastAttachmentId: Attachment.IDType?,
     ) async throws -> Attachment.IDType? {
-        let viewedTimestampCutoff = startTimeMs - Attachment.offloadingThresholdMs
+        let viewedTimestampCutoff = startTimeMs - Attachment.offloadingViewThresholdMs
 
         let needsListMedia = db.read(block: listMediaManager.getNeedsQueryListMedia(tx:))
         if needsListMedia {
             throw NeedsListMediaError()
         }
 
-        let (candidateAttachments, didHitEnd) = try db.read { (tx) -> ([Attachment], Bool) in
+        let (candidateAttachments, didHitEnd) = try db.read { tx -> ([Attachment], Bool) in
             guard offloadingIsAllowed(tx: tx) else {
                 return ([], false)
             }
@@ -186,7 +137,7 @@ public class AttachmentOffloadingManagerImpl: AttachmentOffloadingManager {
                 // Don't offload stuff viewed recently
                 .filter(
                     Column(Attachment.Record.CodingKeys.lastFullscreenViewTimestamp) == nil
-                    || Column(Attachment.Record.CodingKeys.lastFullscreenViewTimestamp) < viewedTimestampCutoff
+                        || Column(Attachment.Record.CodingKeys.lastFullscreenViewTimestamp) < viewedTimestampCutoff,
                 )
 
             if let lastAttachmentId {
@@ -203,22 +154,18 @@ public class AttachmentOffloadingManagerImpl: AttachmentOffloadingManager {
 
             while let record = try cursor.next() {
                 let attachment = try Attachment(record: record)
-
-                var cachedMostRecentReference: AttachmentReference?
-                func fetchMostRecentReference() throws -> AttachmentReference {
-                    if let cachedMostRecentReference { return cachedMostRecentReference }
-                    let reference = try attachmentStore.fetchMostRecentReference(toAttachmentId: attachment.id, tx: tx)
-                    cachedMostRecentReference = reference
-                    return reference
-                }
+                let mostRecentReference = try attachmentStore.fetchMostRecentReference(
+                    toAttachmentId: attachment.id,
+                    tx: tx,
+                )
 
                 if
-                    try attachment.shouldBeOffloaded(
-                        shouldOptimizeLocalStorage: true,
+                    shouldAttachmentBeOffloaded(
+                        attachment,
                         currentUploadEra: currentUploadEra,
                         currentTimestamp: startTimeMs,
-                        mostRecentReference: fetchMostRecentReference(),
-                        tx: tx
+                        mostRecentReference: mostRecentReference,
+                        tx: tx,
                     )
                 {
                     attachments.append(attachment)
@@ -264,50 +211,50 @@ public class AttachmentOffloadingManagerImpl: AttachmentOffloadingManager {
                     return
                 }
 
-                var cachedMostRecentReference: AttachmentReference?
-                func fetchMostRecentReference() throws -> AttachmentReference {
-                    if let cachedMostRecentReference { return cachedMostRecentReference }
-                    let reference = try attachmentStore.fetchMostRecentReference(toAttachmentId: attachment.id, tx: tx)
-                    cachedMostRecentReference = reference
-                    return reference
-                }
+                let mostRecentReference = try attachmentStore.fetchMostRecentReference(
+                    toAttachmentId: attachment.id,
+                    tx: tx,
+                )
 
                 guard
-                    try attachment.shouldBeOffloaded(
-                        shouldOptimizeLocalStorage: true,
+                    shouldAttachmentBeOffloaded(
+                        attachment,
                         currentUploadEra: currentUploadEra,
                         currentTimestamp: startTimeMs,
-                        mostRecentReference: { try fetchMostRecentReference() }(),
-                        tx: tx
+                        mostRecentReference: mostRecentReference,
+                        tx: tx,
                     )
                 else {
                     return
                 }
-                var orphanRecord = OrphanedAttachmentRecord(
-                    localRelativeFilePath: attachment.streamInfo?.localRelativeFilePath,
-                    // Don't delete the thumbnail
-                    localRelativeFilePathThumbnail: nil,
-                    localRelativeFilePathAudioWaveform: {
-                        switch attachment.streamInfo?.contentType {
-                        case .audio(_, let waveformRelativeFilePath):
-                            return waveformRelativeFilePath
-                        default:
-                            return nil
-                        }
-                    }(),
-                    localRelativeFilePathVideoStillFrame: {
-                        switch attachment.streamInfo?.contentType {
-                        case .video(_, _, let stillFrameRelativeFilePath):
-                            return stillFrameRelativeFilePath
-                        default:
-                            return nil
-                        }
-                    }()
+                _ = OrphanedAttachmentRecord.insertRecord(
+                    OrphanedAttachmentRecord.InsertableRecord(
+                        isPendingAttachment: false,
+                        localRelativeFilePath: attachment.streamInfo?.localRelativeFilePath,
+                        // Don't delete the thumbnail
+                        localRelativeFilePathThumbnail: nil,
+                        localRelativeFilePathAudioWaveform: {
+                            switch attachment.streamInfo?.contentType {
+                            case .audio(_, let waveformRelativeFilePath):
+                                return waveformRelativeFilePath
+                            default:
+                                return nil
+                            }
+                        }(),
+                        localRelativeFilePathVideoStillFrame: {
+                            switch attachment.streamInfo?.contentType {
+                            case .video(_, _, let stillFrameRelativeFilePath):
+                                return stillFrameRelativeFilePath
+                            default:
+                                return nil
+                            }
+                        }(),
+                    ),
+                    tx: tx,
                 )
-                try orphanedAttachmentStore.insert(&orphanRecord, tx: tx)
                 let params = Attachment.ConstructionParams.forOffloadingFiles(
                     attachment: attachment,
-                    localRelativeFilePathThumbnail: pendingThumbnails[attachment.id]?.reservedRelativeFilePath
+                    localRelativeFilePathThumbnail: pendingThumbnails[attachment.id]?.reservedRelativeFilePath,
                 )
                 var newRecord = Attachment.Record(params: params)
                 newRecord.sqliteId = attachment.id
@@ -315,10 +262,10 @@ public class AttachmentOffloadingManagerImpl: AttachmentOffloadingManager {
 
                 // Enqueue a download for the attachment we just offloaded, in the `ineligible` state,
                 // so that if we ever disable offloading again it will redownload.
-                try backupAttachmentDownloadStore.enqueue(
+                backupAttachmentDownloadStore.enqueue(
                     ReferencedAttachment(
-                        reference: fetchMostRecentReference(),
-                        attachment: try Attachment(record: newRecord)
+                        reference: mostRecentReference,
+                        attachment: try Attachment(record: newRecord),
                     ),
                     // Only re-enqueue the fullsize attachment for download
                     thumbnail: false,
@@ -326,7 +273,7 @@ public class AttachmentOffloadingManagerImpl: AttachmentOffloadingManager {
                     canDownloadFromMediaTier: true,
                     state: .ineligible,
                     currentTimestamp: dateProvider().ows_millisecondsSince1970,
-                    tx: tx
+                    tx: tx,
                 )
 
                 if let thumbnailOrphanRecordId = pendingThumbnails[attachment.id]?.orphanRecordId {
@@ -350,7 +297,7 @@ public class AttachmentOffloadingManagerImpl: AttachmentOffloadingManager {
         switch backupSettingsStore.backupPlan(tx: tx) {
         case .disabled, .disabling, .free:
             return false
-        case .paidExpiringSoon(_):
+        case .paidExpiringSoon:
             // Don't offload if our subscription expires soon, regardless of the
             // optimizeLocalStorage setting.
             return false
@@ -359,10 +306,52 @@ public class AttachmentOffloadingManagerImpl: AttachmentOffloadingManager {
         }
     }
 
+    /// Returns true if the given attachment should be offloaded (have its local file(s) deleted)
+    /// because it has met the criteria to be stored exclusively in the backup media tier.
+    private func shouldAttachmentBeOffloaded(
+        _ attachment: Attachment,
+        currentUploadEra: String,
+        currentTimestamp: UInt64,
+        mostRecentReference: AttachmentReference,
+        tx: DBReadTransaction,
+    ) -> Bool {
+        guard attachment.asStream() != nil else {
+            // We only offload stuff we have locally, duh.
+            return false
+        }
+        guard
+            let mediaTierInfo = attachment.mediaTierInfo,
+            mediaTierInfo.isUploaded(currentUploadEra: currentUploadEra)
+        else {
+            // Don't offload until we've backed up to media tier.
+            // Note that attachments that are ineligible for media tier upload
+            // (some DMs, view-once, oversized text) won't be uploaded and therefore
+            // won't pass this check. We don't need to also check for "eligibility"
+            // here and can just rely on upload mechanisms to have checked that.
+            return false
+        }
+
+        // Lastly, use the most recent owner's timestamp to determine
+        // eligibility to offload.
+        switch mostRecentReference.owner {
+        case .message(let messageSource):
+            return messageSource.receivedAtTimestamp + Attachment.offloadingThresholdMs < currentTimestamp
+        case .storyMessage:
+            // Story messages expire on their own; never offload
+            // any attachment owned by a story message.
+            return false
+        case .thread:
+            // We never offload thread wallpapers.
+            return false
+        }
+    }
+
+    // MARK: -
+
     private struct PendingThumbnail {
         let attachmentId: Attachment.IDType
         let reservedRelativeFilePath: String
-        let orphanRecordId: OrphanedAttachmentRecord.IDType
+        let orphanRecordId: OrphanedAttachmentRecord.RowId
     }
 
     private struct ThumbnailableAttachment {
@@ -386,7 +375,7 @@ public class AttachmentOffloadingManagerImpl: AttachmentOffloadingManager {
         return ThumbnailableAttachment(
             stream: stream,
             mediaName: mediaName,
-            thumbnailEncryptionKey: attachment.encryptionKey
+            thumbnailEncryptionKey: attachment.encryptionKey,
         )
     }
 
@@ -404,16 +393,17 @@ public class AttachmentOffloadingManagerImpl: AttachmentOffloadingManager {
         }
 
         // do the whole batch in one big write.
-        let thumbnailOrphanRecordIds: [Attachment.IDType: OrphanedAttachmentRecord.IDType] = try await orphanedAttachmentCleaner
+        let thumbnailOrphanRecordIds: [Attachment.IDType: OrphanedAttachmentRecord.RowId] = await orphanedAttachmentCleaner
             .commitPendingAttachments(
                 reservedThumbnailFilePaths.mapValues { reservedThumbnailFilePath in
-                    OrphanedAttachmentRecord(
+                    OrphanedAttachmentRecord.InsertableRecord(
+                        isPendingAttachment: true,
                         localRelativeFilePath: nil,
                         localRelativeFilePathThumbnail: reservedThumbnailFilePath,
                         localRelativeFilePathAudioWaveform: nil,
-                        localRelativeFilePathVideoStillFrame: nil
+                        localRelativeFilePathVideoStillFrame: nil,
                     )
-                }
+                },
             )
 
         // Generate thumbnails in parallel
@@ -427,7 +417,7 @@ public class AttachmentOffloadingManagerImpl: AttachmentOffloadingManager {
                     guard
                         let thumbnailImage = await attachmentThumbnailService.thumbnailImage(
                             for: attachment.stream,
-                            quality: .backupThumbnail
+                            quality: .backupThumbnail,
                         )
                     else {
                         return nil
@@ -446,7 +436,7 @@ public class AttachmentOffloadingManagerImpl: AttachmentOffloadingManager {
                     let (encryptedThumbnailData, _) = try Cryptography.encrypt(
                         thumbnailData,
                         attachmentKey: AttachmentKey(combinedKey: attachment.thumbnailEncryptionKey),
-                        applyExtraPadding: true
+                        applyExtraPadding: true,
                     )
 
                     // Write the thumbnail to the reserved file location.
@@ -482,23 +472,25 @@ public class AttachmentOffloadingManagerImpl: AttachmentOffloadingManager {
             dictionary[attachment.id] = PendingThumbnail(
                 attachmentId: attachment.id,
                 reservedRelativeFilePath: reservedThumbnailFilePath,
-                orphanRecordId: thumbnailOrphanRecordId
+                orphanRecordId: thumbnailOrphanRecordId,
             )
         }
     }
 }
 
+// MARK: -
+
 extension AttachmentStore {
 
     func fetchMostRecentReference(
         toAttachmentId attachmentId: Attachment.IDType,
-        tx: DBReadTransaction
+        tx: DBReadTransaction,
     ) throws -> AttachmentReference {
         var mostRecentReference: AttachmentReference?
         var maxMessageTimestamp: UInt64 = 0
-        try self.enumerateAllReferences(
+        self.enumerateAllReferences(
             toAttachmentId: attachmentId,
-            tx: tx
+            tx: tx,
         ) { reference, stop in
             switch reference.owner {
             case .message(let messageSource):
@@ -512,6 +504,7 @@ extension AttachmentStore {
                     // Always consider these more "recent" than messages.
                     break
                 }
+
             case .storyMessage:
                 switch mostRecentReference?.owner {
                 case nil, .message, .storyMessage:

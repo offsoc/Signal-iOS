@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-@testable import SignalServiceKit
 import XCTest
+@testable import SignalServiceKit
 
 class TSMessageTest: SSKBaseTest {
     private var thread: TSThread!
@@ -18,7 +18,7 @@ class TSMessageTest: SSKBaseTest {
     func testExpiresAtWithoutStartedTimer() {
         let builder = TSOutgoingMessageBuilder.outgoingMessageBuilder(
             thread: self.thread,
-            messageBody: AttachmentContentValidatorMock.mockValidatedBody("foo")
+            messageBody: AttachmentContentValidatorMock.mockValidatedBody("foo"),
         )
         builder.timestamp = 1
         builder.expiresInSeconds = 100
@@ -33,7 +33,7 @@ class TSMessageTest: SSKBaseTest {
 
         let builder = TSOutgoingMessageBuilder.outgoingMessageBuilder(
             thread: self.thread,
-            messageBody: AttachmentContentValidatorMock.mockValidatedBody("foo")
+            messageBody: AttachmentContentValidatorMock.mockValidatedBody("foo"),
         )
         builder.timestamp = 1
         builder.expiresInSeconds = expirationSeconds
@@ -77,7 +77,7 @@ class TSMessageTest: SSKBaseTest {
         do {
             let builder = TSOutgoingMessageBuilder.outgoingMessageBuilder(thread: self.thread)
             builder.timestamp = now - UInt64.minuteInMs
-            builder.giftBadge = OWSGiftBadge()
+            builder.giftBadge = OWSGiftBadge(redemptionCredential: Data())
             let message = SSKEnvironment.shared.databaseStorageRef.read { builder.build(transaction: $0) }
 
             XCTAssertFalse(message.canBeRemotelyDeleted)

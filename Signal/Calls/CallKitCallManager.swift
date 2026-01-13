@@ -112,7 +112,8 @@ final class CallKitCallManager {
                 return nil
             }
             let phoneNumbers = phoneNumberUtil.parsePhoneNumbers(
-                userSpecifiedText: handle, localPhoneNumber: localNumber
+                userSpecifiedText: handle,
+                localPhoneNumber: localNumber,
             )
             return phoneNumbers.first?.e164
         }()
@@ -144,6 +145,7 @@ final class CallKitCallManager {
         let transaction = CXTransaction()
         transaction.addAction(startCallAction)
 
+        Logger.info("CallKit: request(transaction: CXStartCallAction)")
         requestTransaction(transaction)
     }
 
@@ -152,6 +154,7 @@ final class CallKitCallManager {
         let transaction = CXTransaction()
         transaction.addAction(endCallAction)
 
+        Logger.info("CallKit: request(transaction: CXEndCallAction)")
         requestTransaction(transaction)
     }
 
@@ -160,6 +163,7 @@ final class CallKitCallManager {
         let transaction = CXTransaction()
         transaction.addAction(setHeldCallAction)
 
+        Logger.info("CallKit: request(transaction: CXSetHeldCallAction)")
         requestTransaction(transaction)
     }
 
@@ -168,6 +172,7 @@ final class CallKitCallManager {
         let transaction = CXTransaction()
         transaction.addAction(muteCallAction)
 
+        Logger.info("CallKit: request(transaction: CXSetMutedCallAction)")
         requestTransaction(transaction)
     }
 
@@ -176,15 +181,16 @@ final class CallKitCallManager {
         let transaction = CXTransaction()
         transaction.addAction(answerCallAction)
 
+        Logger.info("CallKit: request(transaction: CXAnswerCallAction)")
         requestTransaction(transaction)
     }
 
     private func requestTransaction(_ transaction: CXTransaction) {
         callController.request(transaction) { error in
-            if let error = error {
-                Logger.error("Error requesting transaction: \(error)")
+            if let error {
+                Logger.error("CallKit: Error requesting transaction: \(error)")
             } else {
-                Logger.debug("Requested transaction successfully")
+                Logger.debug("CallKit: Requested transaction successfully")
             }
         }
     }
@@ -219,7 +225,7 @@ final class CallKitCallManager {
     }
 }
 
-fileprivate extension Array {
+private extension Array {
 
     mutating func removeFirst(where predicate: (Element) throws -> Bool) rethrows -> Element? {
         guard let index = try firstIndex(where: predicate) else {

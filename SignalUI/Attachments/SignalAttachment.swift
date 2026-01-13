@@ -98,7 +98,7 @@ public class SignalAttachment: CustomDebugStringConvertible {
             self,
             selector: #selector(didReceiveMemoryWarningNotification),
             name: UIApplication.didReceiveMemoryWarningNotification,
-            object: nil
+            object: nil,
         )
     }
 
@@ -116,22 +116,23 @@ public class SignalAttachment: CustomDebugStringConvertible {
     }
 
     public func staticThumbnail() -> UIImage? {
-        if let cachedThumbnail = cachedThumbnail {
+        if let cachedThumbnail {
             return cachedThumbnail
         }
 
         return autoreleasepool {
-            guard let image: UIImage = {
-                if isImage {
-                    return image()
-                } else if isVideo {
-                    return videoPreview()
-                } else if isAudio {
-                    return nil
-                } else {
-                    return nil
-                }
-            }() else { return nil }
+            guard
+                let image: UIImage = {
+                    if isImage {
+                        return image()
+                    } else if isVideo {
+                        return videoPreview()
+                    } else if isAudio {
+                        return nil
+                    } else {
+                        return nil
+                    }
+                }() else { return nil }
 
             // We want to limit the *smaller* dimension to 60 points,
             // so figure out what the larger dimension would need to
@@ -160,7 +161,7 @@ public class SignalAttachment: CustomDebugStringConvertible {
     }
 
     public func image() -> UIImage? {
-        if let cachedImage = cachedImage {
+        if let cachedImage {
             return cachedImage
         }
         guard let imageData = try? dataSource.readData(), let image = UIImage(data: imageData) else {
@@ -171,7 +172,7 @@ public class SignalAttachment: CustomDebugStringConvertible {
     }
 
     public func videoPreview() -> UIImage? {
-        if let cachedVideoPreview = cachedVideoPreview {
+        if let cachedVideoPreview {
             return cachedVideoPreview
         }
 
@@ -247,21 +248,26 @@ public class SignalAttachment: CustomDebugStringConvertible {
     // Returns the set of UTIs that correspond to valid _input_ image formats
     // for Signal attachments.
     //
-    // Image attachments may be converted to another image format before 
+    // Image attachments may be converted to another image format before
     // being uploaded.
-    public class var inputImageUTISet: Set<String> {
-         // HEIC is valid input, but not valid output. Non-iOS11 clients do not support it.
-        let heicSet: Set<String> = Set(["public.heic", "public.heif"])
+    public static let inputImageUTISet: Set<String> = {
+        // We support additional types for input images because we can transcode
+        // these to a format that's always supported by the receiver.
+        var additionalTypes = [UTType]()
+        if #available(iOS 18.2, *) {
+            additionalTypes.append(.jpegxl)
+        }
+        additionalTypes.append(.heif)
+        additionalTypes.append(.heic)
+        additionalTypes.append(.webP)
 
-        return MimeTypeUtil.supportedInputImageUtiTypes
-            .union(animatedImageUTISet)
-            .union(heicSet)
-    }
+        return outputImageUTISet.union(additionalTypes.map(\.identifier))
+    }()
 
     // Returns the set of UTIs that correspond to valid _output_ image formats
     // for Signal attachments.
     private class var outputImageUTISet: Set<String> {
-        MimeTypeUtil.supportedOutputImageUtiTypes.union(animatedImageUTISet)
+        MimeTypeUtil.supportedImageUtiTypes.union(animatedImageUTISet)
     }
 
     private class var outputVideoUTISet: Set<String> {
@@ -396,58 +402,31 @@ public class SignalAttachment: CustomDebugStringConvertible {
     ) throws(SignalAttachmentError) -> (dataSource: DataSourcePath, containerType: ContainerType)? {
         return try autoreleasepool { () throws(SignalAttachmentError) -> (dataSource: DataSourcePath, containerType: ContainerType)? in
             let maxSize = imageUploadQuality.maxEdgeSize
-            let pixelSize = imageMetadata?.pixelSize
-            var imageProperties = [CFString: Any]()
 
-            guard let imageSource = cgImageSource(for: dataSource, imageFormat: imageMetadata?.imageFormat) else {
+            let imageSource = CGImageSourceCreateWithURL(dataSource.fileUrl as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
+            guard let imageSource else {
                 throw .couldNotParseImage
             }
 
-            let cgImage: CGImage
-            if let pixelSize, pixelSize.width > maxSize || pixelSize.height > maxSize {
-                // NOTE: For unknown reasons, resizing images with UIGraphicsBeginImageContext()
-                // crashes reliably in the share extension after screen lock's auth UI has been presented.
-                // Resizing using a CGContext seems to work fine.
+            // NOTE: For unknown reasons, resizing images with UIGraphicsBeginImageContext()
+            // crashes reliably in the share extension after screen lock's auth UI has been presented.
+            // Resizing using a CGContext seems to work fine.
 
-                // Perform downsampling
-                let downsampleOptions = [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceShouldCacheImmediately: true,
-                    kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceThumbnailMaxPixelSize: maxSize
-                ] as [CFString: Any] as CFDictionary
-                guard let downsampledImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, downsampleOptions) else {
-                    throw .couldNotResizeImage
-                }
-                cgImage = downsampledImage
-            } else {
-                guard let originalImageProperties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, [
-                    kCGImageSourceShouldCache: false
-                ] as CFDictionary) as? [CFString: Any] else {
-                    throw .couldNotParseImage
-                }
-
-                // Preserve any orientation properties in the final output image.
-                if let tiffOrientation = originalImageProperties[kCGImagePropertyTIFFOrientation] {
-                    imageProperties[kCGImagePropertyTIFFOrientation] = tiffOrientation
-                }
-                if let iptcOrientation = originalImageProperties[kCGImagePropertyIPTCImageOrientation] {
-                    imageProperties[kCGImagePropertyIPTCImageOrientation] = iptcOrientation
-                }
-
-                guard let image = CGImageSourceCreateImageAtIndex(imageSource, 0, [
-                    kCGImageSourceShouldCacheImmediately: true
-                ] as CFDictionary) else {
-                    throw .couldNotParseImage
-                }
-
-                cgImage = image
+            let downsampleOptions = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxSize,
+            ] as [CFString: Any] as CFDictionary
+            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, downsampleOptions) else {
+                throw .couldNotResizeImage
             }
 
             // Write to disk and convert to file based data source,
             // so we can keep the image out of memory.
 
             let containerType: ContainerType
+            var imageProperties = [CFString: Any]()
 
             // We convert everything that's not sticker-like to jpg, because
             // often images with alpha channels don't actually have any
@@ -458,7 +437,9 @@ public class SignalAttachment: CustomDebugStringConvertible {
                 containerType = .png
             } else {
                 containerType = .jpg
-                imageProperties[kCGImageDestinationLossyCompressionQuality] = compressionQuality(for: pixelSize ?? .zero)
+                imageProperties[kCGImageDestinationLossyCompressionQuality] = compressionQuality(
+                    for: CGSize(width: cgImage.width, height: cgImage.height),
+                )
             }
 
             let tempFileUrl = OWSFileSystem.temporaryFileUrl(fileExtension: containerType.fileExtension)
@@ -506,44 +487,34 @@ public class SignalAttachment: CustomDebugStringConvertible {
         return 0.6
     }
 
-    private class func cgImageSource(for dataSource: DataSourcePath, imageFormat: ImageFormat?) -> CGImageSource? {
-        if imageFormat == .webp {
-            // CGImageSource doesn't know how to handle webp, so we have
-            // to pass it through YYImage. This is costly and we could
-            // perhaps do better, but webp images are usually small.
-            guard let yyImage = UIImage.sd_image(with: try? dataSource.readData()) else {
-                owsFailDebug("Failed to initialized YYImage")
-                return nil
-            }
-            guard let imageData = yyImage.pngData() else {
-                owsFailDebug("Failed to get png data for YYImage")
-                return nil
-            }
-            return CGImageSourceCreateWithData(imageData as CFData, nil)
-        } else {
-            // If we can init with a URL, we prefer to. This way, we can avoid loading
-            // the full image into memory. We need to set kCGImageSourceShouldCache to
-            // false to ensure that CGImageSource doesn't try and read the file immediately.
-            return CGImageSourceCreateWithURL(dataSource.fileUrl as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
-        }
-    }
-
     private static let preservedMetadata: [CFString] = [
         "\(kCGImageMetadataPrefixTIFF):\(kCGImagePropertyTIFFOrientation)" as CFString,
-        "\(kCGImageMetadataPrefixIPTCCore):\(kCGImagePropertyIPTCImageOrientation)" as CFString
+        "\(kCGImageMetadataPrefixIPTCCore):\(kCGImagePropertyIPTCImageOrientation)" as CFString,
     ]
 
     private static let pngChunkTypesToKeep: Set<Data> = {
         let asAscii: [String] = [
             // [Critical chunks.][0]
             // [0]: https://www.w3.org/TR/PNG/#11Critical-chunks
-            "IHDR", "PLTE", "IDAT", "IEND",
+            "IHDR",
+            "PLTE",
+            "IDAT",
+            "IEND",
             // [Ancillary chunks][1] that might affect rendering.
             // [1]: https://www.w3.org/TR/PNG/#11Ancillary-chunks
-            "tRNS", "cHRM", "gAMA", "iCCP", "sRGB", "bKGD", "pHYs", "sPLT",
+            "tRNS",
+            "cHRM",
+            "gAMA",
+            "iCCP",
+            "sRGB",
+            "bKGD",
+            "pHYs",
+            "sPLT",
             // [Animated PNG chunks.][2]
             // [2]: https://wiki.mozilla.org/APNG_Specification#Structure
-            "acTL", "fcTL", "fdAT"
+            "acTL",
+            "fcTL",
+            "fdAT",
         ]
         let asBytes = asAscii.lazy.compactMap { $0.data(using: .ascii) }
         return Set(asBytes)
@@ -622,7 +593,7 @@ public class SignalAttachment: CustomDebugStringConvertible {
 
         let copyOptions: NSDictionary = [
             kCGImageDestinationMergeMetadata: true,
-            kCGImageDestinationMetadata: metadata
+            kCGImageDestinationMetadata: metadata,
         ]
         guard CGImageDestinationCopyImageSource(destination, source, copyOptions, nil) else {
             throw .couldNotRemoveMetadata

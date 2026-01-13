@@ -6,21 +6,68 @@
 import Foundation
 import LibSignalClient
 
-@objc(OWSOutgoingResendResponse) // for Mantle
+@objc(OWSOutgoingResendResponse)
 final class OWSOutgoingResendResponse: TSOutgoingMessage {
-    @objc // for Mantle
+    required init?(coder: NSCoder) {
+        self.derivedContentHint = (coder.decodeObject(of: NSNumber.self, forKey: "derivedContentHint")?.intValue).flatMap(SealedSenderContentHint.init(rawValue:)) ?? .default
+        self.didAppendSKDM = coder.decodeObject(of: NSNumber.self, forKey: "didAppendSKDM")?.boolValue ?? false
+        self.originalGroupId = coder.decodeObject(of: NSData.self, forKey: "originalGroupId") as Data?
+        self.originalMessagePlaintext = coder.decodeObject(of: NSData.self, forKey: "originalMessagePlaintext") as Data?
+        self.originalThreadId = coder.decodeObject(of: NSString.self, forKey: "originalThreadId") as String?
+        super.init(coder: coder)
+    }
+
+    override func encode(with coder: NSCoder) {
+        super.encode(with: coder)
+        coder.encode(NSNumber(value: self.derivedContentHint.rawValue), forKey: "derivedContentHint")
+        coder.encode(NSNumber(value: self.didAppendSKDM), forKey: "didAppendSKDM")
+        if let originalGroupId {
+            coder.encode(originalGroupId, forKey: "originalGroupId")
+        }
+        if let originalMessagePlaintext {
+            coder.encode(originalMessagePlaintext, forKey: "originalMessagePlaintext")
+        }
+        if let originalThreadId {
+            coder.encode(originalThreadId, forKey: "originalThreadId")
+        }
+    }
+
+    override var hash: Int {
+        var hasher = Hasher()
+        hasher.combine(super.hash)
+        hasher.combine(derivedContentHint)
+        hasher.combine(didAppendSKDM)
+        hasher.combine(originalGroupId)
+        hasher.combine(originalMessagePlaintext)
+        hasher.combine(originalThreadId)
+        return hasher.finalize()
+    }
+
+    override func isEqual(_ object: Any?) -> Bool {
+        guard let object = object as? Self else { return false }
+        guard super.isEqual(object) else { return false }
+        guard self.derivedContentHint == object.derivedContentHint else { return false }
+        guard self.didAppendSKDM == object.didAppendSKDM else { return false }
+        guard self.originalGroupId == object.originalGroupId else { return false }
+        guard self.originalMessagePlaintext == object.originalMessagePlaintext else { return false }
+        guard self.originalThreadId == object.originalThreadId else { return false }
+        return true
+    }
+
+    override func copy(with zone: NSZone? = nil) -> Any {
+        let result = super.copy(with: zone) as! Self
+        result.derivedContentHint = self.derivedContentHint
+        result.didAppendSKDM = self.didAppendSKDM
+        result.originalGroupId = self.originalGroupId
+        result.originalMessagePlaintext = self.originalMessagePlaintext
+        result.originalThreadId = self.originalThreadId
+        return result
+    }
+
     private(set) var originalMessagePlaintext: Data?
-
-    @objc // for Mantle
     private(set) var originalThreadId: String?
-
-    @objc // for Mantle
     private(set) var originalGroupId: Data?
-
-    @objc // for Mantle
-    private var derivedContentHint: SealedSenderContentHint = .default
-
-    @objc // for Mantle
+    private var derivedContentHint: SealedSenderContentHint
     private(set) var didAppendSKDM: Bool = false
 
     private init(
@@ -29,19 +76,19 @@ final class OWSOutgoingResendResponse: TSOutgoingMessage {
         originalThreadId: String?,
         originalGroupId: Data?,
         derivedContentHint: SealedSenderContentHint,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
+        self.derivedContentHint = derivedContentHint
         super.init(
             outgoingMessageWith: outgoingMessageBuilder,
             additionalRecipients: [],
             explicitRecipients: [],
             skippedRecipients: [],
-            transaction: tx
+            transaction: tx,
         )
         self.originalMessagePlaintext = originalMessagePlaintext
         self.originalThreadId = originalThreadId
         self.originalGroupId = originalGroupId
-        self.derivedContentHint = derivedContentHint
     }
 
     convenience init?(
@@ -49,18 +96,20 @@ final class OWSOutgoingResendResponse: TSOutgoingMessage {
         deviceId: DeviceId,
         failedTimestamp: UInt64,
         didResetSession: Bool,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         let targetThread = TSContactThread.getOrCreateThread(withContactAddress: SignalServiceAddress(aci), transaction: tx)
         let builder: TSOutgoingMessageBuilder = .withDefaultValues(thread: targetThread)
 
         let messageSendLog = SSKEnvironment.shared.messageSendLogRef
-        if let payloadRecord = messageSendLog.fetchPayload(
-            recipientAci: aci,
-            recipientDeviceId: deviceId,
-            timestamp: failedTimestamp,
-            tx: tx
-        ) {
+        if
+            let payloadRecord = messageSendLog.fetchPayload(
+                recipientAci: aci,
+                recipientDeviceId: deviceId,
+                timestamp: failedTimestamp,
+                tx: tx,
+            )
+        {
             let originalThread = TSThread.anyFetch(uniqueId: payloadRecord.uniqueThreadId, transaction: tx)
 
             // We should inherit the timestamp of the failed message. This allows the
@@ -81,7 +130,7 @@ final class OWSOutgoingResendResponse: TSOutgoingMessage {
                 originalThreadId: payloadRecord.uniqueThreadId,
                 originalGroupId: (originalThread as? TSGroupThread)?.groupId,
                 derivedContentHint: payloadRecord.contentHint,
-                tx: tx
+                tx: tx,
             )
         } else if didResetSession {
             Logger.info("Failed to find MSL record for resend request: \(failedTimestamp). Will reply with Null message")
@@ -91,22 +140,12 @@ final class OWSOutgoingResendResponse: TSOutgoingMessage {
                 originalThreadId: nil,
                 originalGroupId: nil,
                 derivedContentHint: .implicit,
-                tx: tx
+                tx: tx,
             )
         } else {
             Logger.warn("Failed to find MSL record for resend request: \(failedTimestamp). Declining to respond.")
             return nil
         }
-    }
-
-    required init!(coder: NSCoder) {
-        super.init(coder: coder)
-        // Discard invalid SealedSenderContentHint values.
-        self.derivedContentHint = SealedSenderContentHint(rawValue: self.derivedContentHint.rawValue) ?? .default
-    }
-
-    required init(dictionary dictionaryValue: [String: Any]!) throws {
-        try super.init(dictionary: dictionaryValue)
     }
 
     override var shouldRecordSendLog: Bool { false }
@@ -175,9 +214,9 @@ final class OWSOutgoingResendResponse: TSOutgoingMessage {
         {
             do {
                 try SSKEnvironment.shared.senderKeyStoreRef.recordSentSenderKeys(
-                    [SentSenderKey(recipient: serviceId, timestamp: self.timestamp, messages: sentMessages)],
+                    [SentSenderKey(recipient: serviceId, messages: sentMessages)],
                     for: originalThread,
-                    writeTx: tx
+                    writeTx: tx,
                 )
             } catch {
                 owsFailDebug("Couldn't update sender key after resend: \(error)")

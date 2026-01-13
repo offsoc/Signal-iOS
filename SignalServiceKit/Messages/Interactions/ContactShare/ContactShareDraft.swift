@@ -6,25 +6,19 @@
 public import Contacts
 
 public class ContactShareDraft {
-
     public var name: OWSContactName
-
     public var addresses: [OWSContactAddress]
-
     public var emails: [OWSContactEmail]
-
     public var phoneNumbers: [OWSContactPhoneNumber]
-
     public var existingAvatarAttachment: ReferencedAttachment?
 
+    private var cachedAvatarImage: UIImage?
     public var avatarImageData: Data? {
         didSet {
             self.cachedAvatarImage = nil
             existingAvatarAttachment = nil
         }
     }
-
-    private var cachedAvatarImage: UIImage?
 
     public var avatarImage: UIImage? {
         if self.cachedAvatarImage != nil {
@@ -47,7 +41,7 @@ public class ContactShareDraft {
         profileManager: any ProfileManager,
         recipientManager: any SignalRecipientManager,
         tsAccountManager: any TSAccountManager,
-        tx: DBReadTransaction
+        tx: DBReadTransaction,
     ) -> ContactShareDraft {
         let avatarData = loadAvatarData(
             cnContact: cnContact,
@@ -57,7 +51,7 @@ public class ContactShareDraft {
             profileManager: profileManager,
             recipientManager: recipientManager,
             tsAccountManager: tsAccountManager,
-            tx: tx
+            tx: tx,
         )
         return ContactShareDraft(
             name: OWSContactName(cnContact: cnContact),
@@ -65,7 +59,7 @@ public class ContactShareDraft {
             emails: cnContact.emailAddresses.map(OWSContactEmail.init(cnLabeledValue:)),
             phoneNumbers: cnContact.phoneNumbers.map(OWSContactPhoneNumber.init(cnLabeledValue:)),
             existingAvatarAttachment: nil,
-            avatarImageData: avatarData
+            avatarImageData: avatarData,
         )
     }
 
@@ -77,7 +71,7 @@ public class ContactShareDraft {
         profileManager: any ProfileManager,
         recipientManager: any SignalRecipientManager,
         tsAccountManager: any TSAccountManager,
-        tx: DBReadTransaction
+        tx: DBReadTransaction,
     ) -> Data? {
         if let systemAvatarImageData = contactManager.avatarData(for: cnContact) {
             return systemAvatarImageData
@@ -87,7 +81,7 @@ public class ContactShareDraft {
         let canonicalPhoneNumbers = FetchedSystemContacts.parsePhoneNumbers(
             for: signalContact(),
             phoneNumberUtil: phoneNumberUtil,
-            localPhoneNumber: E164(localPhoneNumber).map(CanonicalPhoneNumber.init(nonCanonicalPhoneNumber:))
+            localPhoneNumber: E164(localPhoneNumber).map(CanonicalPhoneNumber.init(nonCanonicalPhoneNumber:)),
         )
         for canonicalPhoneNumber in canonicalPhoneNumbers {
             for phoneNumber in [canonicalPhoneNumber.rawValue] + canonicalPhoneNumber.alternatePhoneNumbers() {
@@ -110,7 +104,7 @@ public class ContactShareDraft {
         emails: [OWSContactEmail],
         phoneNumbers: [OWSContactPhoneNumber],
         existingAvatarAttachment: ReferencedAttachment?,
-        avatarImageData: Data?
+        avatarImageData: Data?,
     ) {
         self.name = name
         self.addresses = addresses
@@ -128,7 +122,7 @@ public class ContactShareDraft {
             emails: [],
             phoneNumbers: [],
             existingAvatarAttachment: nil,
-            avatarImageData: nil
+            avatarImageData: nil,
         )
     }
 
@@ -143,7 +137,7 @@ public class ContactShareDraft {
             name: name,
             phoneNumbers: phoneNumbers,
             emails: emails,
-            addresses: addresses
+            addresses: addresses,
         )
     }
 
@@ -153,14 +147,5 @@ public class ContactShareDraft {
         public let emails: [OWSContactEmail]
         public let phoneNumbers: [OWSContactPhoneNumber]
         public let avatar: AttachmentDataSource?
-
-        public var ows_isValid: Bool {
-            return OWSContact.isValid(
-                name: name,
-                phoneNumbers: phoneNumbers,
-                emails: emails,
-                addresses: addresses
-            )
-        }
     }
 }

@@ -51,8 +51,8 @@ extension BackupArchive {
 
 public protocol _MessageBackup_BlockingManagerShim {
 
-    func blockedRecipientIds(tx: DBReadTransaction) throws -> Set<SignalRecipient.RowId>
-    func blockedGroupIds(tx: DBReadTransaction) throws -> [Data]
+    func blockedRecipientIds(tx: DBReadTransaction) -> Set<SignalRecipient.RowId>
+    func blockedGroupIds(tx: DBReadTransaction) -> [Data]
 
     func addBlockedAddress(_ address: SignalServiceAddress, tx: DBWriteTransaction)
     func addBlockedGroupId(_ groupId: Data, tx: DBWriteTransaction)
@@ -66,12 +66,12 @@ public class _MessageBackup_BlockingManagerWrapper: _MessageBackup_BlockingManag
         self.blockingManager = blockingManager
     }
 
-    public func blockedRecipientIds(tx: DBReadTransaction) throws -> Set<SignalRecipient.RowId> {
-        return try blockingManager.blockedRecipientIds(tx: tx)
+    public func blockedRecipientIds(tx: DBReadTransaction) -> Set<SignalRecipient.RowId> {
+        return blockingManager.blockedRecipientIds(tx: tx)
     }
 
-    public func blockedGroupIds(tx: DBReadTransaction) throws -> [Data] {
-        return try blockingManager.blockedGroupIds(transaction: tx)
+    public func blockedGroupIds(tx: DBReadTransaction) -> [Data] {
+        return blockingManager.blockedGroupIds(transaction: tx)
     }
 
     public func addBlockedAddress(_ address: SignalServiceAddress, tx: DBWriteTransaction) {
@@ -128,6 +128,7 @@ public class _MessageBackup_DonationSubscriptionManagerWrapper: _MessageBackup_D
     public func displayBadgesOnProfile(tx: DBReadTransaction) -> Bool {
         DonationSubscriptionManager.displayBadgesOnProfile(transaction: tx)
     }
+
     public func setDisplayBadgesOnProfile(value: Bool, tx: DBWriteTransaction) {
         DonationSubscriptionManager.setDisplayBadgesOnProfile(value, updateStorageService: false, transaction: tx)
     }
@@ -248,7 +249,7 @@ public protocol _MessageBackup_ProfileManagerShim {
 
     func isGroupId(inProfileWhitelist groupId: Data, tx: DBReadTransaction) -> Bool
 
-    func addToWhitelist(_ address: SignalServiceAddress, tx: DBWriteTransaction)
+    func addRecipientToProfileWhitelist(_ recipient: inout SignalRecipient, tx: DBWriteTransaction)
 
     func addToWhitelist(_ thread: TSGroupThread, tx: DBWriteTransaction)
 
@@ -259,7 +260,7 @@ public protocol _MessageBackup_ProfileManagerShim {
         bio: String?,
         bioEmoji: String?,
         profileKey: Aes256Key,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     )
 
     func upsertOtherUserProfile(
@@ -267,7 +268,7 @@ public protocol _MessageBackup_ProfileManagerShim {
         givenName: String?,
         familyName: String?,
         profileKey: Aes256Key?,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     )
 }
 
@@ -300,19 +301,19 @@ public class _MessageBackup_ProfileManagerWrapper: _MessageBackup_ProfileManager
         profileManager.isGroupId(inProfileWhitelist: groupId, transaction: tx)
     }
 
-    public func addToWhitelist(_ address: SignalServiceAddress, tx: DBWriteTransaction) {
-        profileManager.addUser(
-            toProfileWhitelist: address,
+    public func addRecipientToProfileWhitelist(_ recipient: inout SignalRecipient, tx: DBWriteTransaction) {
+        profileManager.addRecipientToProfileWhitelist(
+            &recipient,
             userProfileWriter: .backupRestore,
-            transaction: tx
+            tx: tx,
         )
     }
 
     public func addToWhitelist(_ thread: TSGroupThread, tx: DBWriteTransaction) {
-        profileManager.addThread(
-            toProfileWhitelist: thread,
+        profileManager.addGroupId(
+            toProfileWhitelist: thread.groupModel.groupId,
             userProfileWriter: .backupRestore,
-            transaction: tx
+            transaction: tx,
         )
     }
 
@@ -323,7 +324,7 @@ public class _MessageBackup_ProfileManagerWrapper: _MessageBackup_ProfileManager
         bio: String?,
         bioEmoji: String?,
         profileKey: Aes256Key,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         /// We can't simply insert a local-user profile here, because
         /// `OWSProfileManager` will create one itself during its `warmCaches`
@@ -331,7 +332,7 @@ public class _MessageBackup_ProfileManagerWrapper: _MessageBackup_ProfileManager
         /// simply overwrite its fields.
         let localUserProfile = OWSUserProfile.getOrBuildUserProfileForLocalUser(
             userProfileWriter: .backupRestore,
-            tx: tx
+            tx: tx,
         )
 
         localUserProfile.upsertWithNoSideEffects(
@@ -341,7 +342,7 @@ public class _MessageBackup_ProfileManagerWrapper: _MessageBackup_ProfileManager
             bio: bio,
             bioEmoji: bioEmoji,
             profileKey: profileKey,
-            tx: tx
+            tx: tx,
         )
     }
 
@@ -350,7 +351,7 @@ public class _MessageBackup_ProfileManagerWrapper: _MessageBackup_ProfileManager
         givenName: String?,
         familyName: String?,
         profileKey: Aes256Key?,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         if case .localUser = insertableAddress {
             owsFailDebug("Cannot use this method for the local user's profile!")
@@ -362,7 +363,7 @@ public class _MessageBackup_ProfileManagerWrapper: _MessageBackup_ProfileManager
         let profile = OWSUserProfile.getOrBuildUserProfile(
             for: insertableAddress,
             userProfileWriter: .backupRestore,
-            tx: tx
+            tx: tx,
         )
 
         profile.upsertWithNoSideEffects(
@@ -372,7 +373,7 @@ public class _MessageBackup_ProfileManagerWrapper: _MessageBackup_ProfileManager
             bio: nil,
             bioEmoji: nil,
             profileKey: profileKey,
-            tx: tx
+            tx: tx,
         )
     }
 }
@@ -388,6 +389,7 @@ public class _MessageBackup_ReactionManagerWrapper: _MessageBackup_ReactionManag
     public func customEmojiSet(tx: DBReadTransaction) -> [String]? {
         ReactionManager.customEmojiSet(transaction: tx)
     }
+
     public func setCustomEmojiSet(emojis: [String]?, tx: DBWriteTransaction) {
         ReactionManager.setCustomEmojiSet(emojis, transaction: tx)
     }
@@ -399,6 +401,7 @@ public protocol _MessageBackup_ReceiptManagerShim {
     func areReadReceiptsEnabled(tx: DBReadTransaction) -> Bool
     func setAreReadReceiptsEnabled(value: Bool, tx: DBWriteTransaction)
 }
+
 public class _MessageBackup_ReceiptManagerWrapper: _MessageBackup_ReceiptManagerShim {
     let receiptManager: OWSReceiptManager
     init(receiptManager: OWSReceiptManager) {
@@ -456,6 +459,7 @@ public class _MessageBackup_SSKPreferencesWrapper: _MessageBackup_SSKPreferences
     public func preferContactAvatars(tx: DBReadTransaction) -> Bool {
         SSKPreferences.preferContactAvatars(transaction: tx)
     }
+
     public func setPreferContactAvatars(value: Bool, tx: DBWriteTransaction) {
         SSKPreferences.setPreferContactAvatars(value, updateStorageService: false, transaction: tx)
     }
@@ -488,18 +492,23 @@ public class _MessageBackup_StoryManagerWrapper: _MessageBackup_StoryManagerShim
     public func hasSetMyStoriesPrivacy(tx: DBReadTransaction) -> Bool {
         StoryManager.hasSetMyStoriesPrivacy(transaction: tx)
     }
+
     public func setHasSetMyStoriesPrivacy(value: Bool, tx: DBWriteTransaction) {
         StoryManager.setHasSetMyStoriesPrivacy(value, shouldUpdateStorageService: false, transaction: tx)
     }
+
     public func areStoriesEnabled(tx: DBReadTransaction) -> Bool {
         StoryManager.areStoriesEnabled(transaction: tx)
     }
+
     public func setAreStoriesEnabled(value: Bool, tx: DBWriteTransaction) {
         StoryManager.setAreStoriesEnabled(value, shouldUpdateStorageService: false, transaction: tx)
     }
+
     public func areViewReceiptsEnabled(tx: DBReadTransaction) -> Bool {
         StoryManager.areViewReceiptsEnabled(transaction: tx)
     }
+
     public func setAreViewReceiptsEnabled(value: Bool, tx: DBWriteTransaction) {
         StoryManager.setAreViewReceiptsEnabled(value, shouldUpdateStorageService: false, transaction: tx)
     }
@@ -519,9 +528,11 @@ public class _MessageBackup_SystemStoryManagerWrapper: _MessageBackup_SystemStor
     init(systemStoryManager: SystemStoryManagerProtocol) {
         self.systemStoryManager = systemStoryManager
     }
+
     public func isOnboardingStoryViewed(tx: DBReadTransaction) -> Bool {
         systemStoryManager.isOnboardingStoryViewed(transaction: tx)
     }
+
     public func setHasViewedOnboardingStory(value: Bool, tx: DBWriteTransaction) {
         guard value else {
             /// This is a one-way setting, so there's no way to set `false`. If
@@ -531,13 +542,15 @@ public class _MessageBackup_SystemStoryManagerWrapper: _MessageBackup_SystemStor
 
         let source: OnboardingStoryViewSource = .local(
             timestamp: 0,
-            shouldUpdateStorageService: false
+            shouldUpdateStorageService: false,
         )
         try? systemStoryManager.setHasViewedOnboardingStory(source: source, transaction: tx)
     }
+
     public func hasSeenGroupStoryEducationSheet(tx: DBReadTransaction) -> Bool {
         systemStoryManager.isGroupStoryEducationSheetViewed(tx: tx)
     }
+
     public func setHasSeenGroupStoryEducationSheet(value: Bool, tx: DBWriteTransaction) {
         guard value else {
             /// This is a one-way setting, so there's no way to set `false`. If
@@ -555,6 +568,7 @@ public protocol _MessageBackup_TypingIndicatorsShim {
     func areTypingIndicatorsEnabled() -> Bool
     func setTypingIndicatorsEnabled(value: Bool, tx: DBWriteTransaction)
 }
+
 public class _MessageBackup_TypingIndicatorsWrapper: _MessageBackup_TypingIndicatorsShim {
     let typingIndicators: TypingIndicators
     init(typingIndicators: TypingIndicators) {
@@ -584,12 +598,15 @@ public class _MessageBackup_UDManagerWrapper: _MessageBackup_UDManagerShim {
     init(udManager: OWSUDManager) {
         self.udManager = udManager
     }
+
     public func phoneNumberSharingMode(tx: DBReadTransaction) -> PhoneNumberSharingMode? {
         udManager.phoneNumberSharingMode(tx: tx)
     }
+
     public func setPhoneNumberSharingMode(mode: PhoneNumberSharingMode, tx: DBWriteTransaction) {
         udManager.setPhoneNumberSharingMode(mode, updateStorageServiceAndProfile: false, tx: tx)
     }
+
     public func shouldAllowUnrestrictedAccessLocal(tx: DBReadTransaction) -> Bool {
         udManager.shouldAllowUnrestrictedAccessLocal(transaction: tx)
     }

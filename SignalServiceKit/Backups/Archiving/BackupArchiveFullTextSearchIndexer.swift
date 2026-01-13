@@ -3,10 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-//
-// Copyright 2024 Signal Messenger, LLC
-// SPDX-License-Identifier: AGPL-3.0-only
-//
+import GRDB
 
 public protocol BackupArchiveFullTextSearchIndexer {
 
@@ -28,7 +25,6 @@ public class BackupArchiveFullTextSearchIndexerImpl: BackupArchiveFullTextSearch
     private let appReadiness: AppReadiness
     private let dateProvider: DateProviderMonotonic
     private let db: any DB
-    private let fullTextSearchIndexer: Shims.FullTextSearchIndexer
     private let interactionStore: InteractionStore
     private let kvStore: KeyValueStore
     private let logger: PrefixedLogger
@@ -39,14 +35,12 @@ public class BackupArchiveFullTextSearchIndexerImpl: BackupArchiveFullTextSearch
         appReadiness: AppReadiness,
         dateProvider: @escaping DateProviderMonotonic,
         db: any DB,
-        fullTextSearchIndexer: Shims.FullTextSearchIndexer,
         interactionStore: InteractionStore,
-        searchableNameIndexer: SearchableNameIndexer
+        searchableNameIndexer: SearchableNameIndexer,
     ) {
         self.appReadiness = appReadiness
         self.dateProvider = dateProvider
         self.db = db
-        self.fullTextSearchIndexer = fullTextSearchIndexer
         self.interactionStore = interactionStore
         self.kvStore = KeyValueStore(collection: "BackupFullTextSearchIndexerImpl")
         self.logger = PrefixedLogger(prefix: "[Backups]")
@@ -71,9 +65,9 @@ public class BackupArchiveFullTextSearchIndexerImpl: BackupArchiveFullTextSearch
         let maxInteractionRowId = try Int64.fetchOne(
             tx.database,
             sql: """
-                SELECT max(\(TSInteractionSerializer.idColumn.columnName))
-                FROM \(TSInteraction.table.tableName);
-                """
+            SELECT max(\(TSInteractionSerializer.idColumn.columnName))
+            FROM \(TSInteraction.table.tableName);
+            """,
         )
         if let maxInteractionRowId {
             setMaxInteractionRowIdInclusive(maxInteractionRowId, tx: tx)
@@ -91,11 +85,11 @@ public class BackupArchiveFullTextSearchIndexerImpl: BackupArchiveFullTextSearch
         }
         var (
             minInteractionRowIdExclusive,
-            maxInteractionRowIdInclusive
+            maxInteractionRowIdInclusive,
         ) = db.read { tx in
             return (
                 self.minInteractionRowIdExclusive(tx: tx),
-                self.maxInteractionRowIdInclusive(tx: tx)
+                self.maxInteractionRowIdInclusive(tx: tx),
             )
         }
 
@@ -129,7 +123,7 @@ public class BackupArchiveFullTextSearchIndexerImpl: BackupArchiveFullTextSearch
                 let cursor = try self.interactionStore.fetchCursor(
                     minRowIdExclusive: minInteractionRowIdExclusive,
                     maxRowIdInclusive: maxInteractionRowIdInclusive,
-                    tx: tx
+                    tx: tx,
                 )
                 var processedCount = 0
 
@@ -141,7 +135,7 @@ public class BackupArchiveFullTextSearchIndexerImpl: BackupArchiveFullTextSearch
                             finalizeBatch(tx: tx)
                             return true
                         }
-                        try self.index(interaction, tx: tx)
+                        index(interaction, tx: tx)
                         maxInteractionRowIdSoFar = interaction.sqliteRowId
                         processedCount += 1
                     }
@@ -156,25 +150,20 @@ public class BackupArchiveFullTextSearchIndexerImpl: BackupArchiveFullTextSearch
         }
     }
 
-    private func index(_ interaction: TSInteraction, tx: DBWriteTransaction) throws {
+    private func index(_ interaction: TSInteraction, tx: DBWriteTransaction) {
         guard let message = interaction as? TSMessage else {
             return
         }
-        do {
-            try self.fullTextSearchIndexer.insert(message, tx: tx)
-        } catch let insertError {
-            do {
-                try self.fullTextSearchIndexer.update(message, tx: tx)
-            } catch {
-                throw insertError
-            }
-        }
+
+        FullTextSearchIndexer.insert(message, tx: tx)
 
         if let bodyRanges = message.bodyRanges {
             let uniqueMentionedAcis = Set(bodyRanges.mentions.values)
             for mentionedAci in uniqueMentionedAcis {
                 let mention = TSMention(uniqueMessageId: message.uniqueId, uniqueThreadId: message.uniqueThreadId, aci: mentionedAci)
-                try mention.save(tx.database)
+                failIfThrows {
+                    try mention.save(tx.database)
+                }
             }
         }
     }
@@ -215,34 +204,5 @@ public class BackupArchiveFullTextSearchIndexerImpl: BackupArchiveFullTextSearch
         static let batchDelayMs: UInt64 = 30
         // _Minimum_ time we spent per batch
         static let batchDurationMs: UInt64 = 90
-    }
-}
-
-// MARK: - Shims
-
-extension BackupArchiveFullTextSearchIndexerImpl {
-    public enum Shims {
-        public typealias FullTextSearchIndexer = _BackupArchiveFullTextSearchIndexerImpl_FullTextSearchIndexerShim
-    }
-    public enum Wrappers {
-        public typealias FullTextSearchIndexer = _BackupArchiveFullTextSearchIndexerImpl_FullTextSearchIndexerWrapper
-    }
-}
-
-public protocol _BackupArchiveFullTextSearchIndexerImpl_FullTextSearchIndexerShim {
-    func insert(_ message: TSMessage, tx: DBWriteTransaction) throws
-    func update(_ message: TSMessage, tx: DBWriteTransaction) throws
-}
-
-public class _BackupArchiveFullTextSearchIndexerImpl_FullTextSearchIndexerWrapper: BackupArchiveFullTextSearchIndexerImpl.Shims.FullTextSearchIndexer {
-
-    public init() {}
-
-    public func insert(_ message: TSMessage, tx: DBWriteTransaction) throws {
-        try FullTextSearchIndexer.insert(message, tx: tx)
-    }
-
-    public func update(_ message: TSMessage, tx: DBWriteTransaction) throws {
-        try FullTextSearchIndexer.update(message, tx: tx)
     }
 }

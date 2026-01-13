@@ -6,9 +6,9 @@
 import Foundation
 @testable import SignalServiceKit
 
-typealias PerformTSRequestBlock = ((TSRequest) async throws -> HTTPResponse)
-typealias PerformRequestBlock = ((URLRequest) async throws -> HTTPResponse)
-typealias PerformUploadBlock = ((URLRequest, Data, OWSProgressSource?) async throws -> HTTPResponse)
+typealias PerformTSRequestBlock = (TSRequest) async throws -> HTTPResponse
+typealias PerformRequestBlock = (URLRequest) async throws -> HTTPResponse
+typealias PerformUploadBlock = (URLRequest, Data, OWSProgressSource?) async throws -> HTTPResponse
 
 enum MockRequestType {
     case uploadForm(PerformTSRequestBlock)
@@ -79,7 +79,7 @@ class AttachmentUploadManagerMockHelper {
     var mockFileSystem = AttachmentUploadManagerImpl.Mocks.FileSystem()
     var mockInteractionStore = MockInteractionStore()
     var mockStoryStore = StoryStoreImpl()
-    var mockAttachmentStore = AttachmentStoreMock()
+    var mockAttachmentStore = AttachmentStore()
     lazy var mockAttachmentUploadStore = AttachmentUploadStoreMock(attachmentStore: mockAttachmentStore)
     var mockAttachmentThumbnailService = MockAttachmentThumbnailService()
     var mockAttachmentEncrypter = AttachmentUploadManagerImpl.Mocks.AttachmentEncrypter()
@@ -102,29 +102,25 @@ class AttachmentUploadManagerMockHelper {
     // auth set the active location Requests (and the active URL)
     var activeUploadRequestMocks = [MockRequestType]()
 
-    func setup(encryptedSize: UInt32, unencryptedSize: UInt32) {
-        setup(
+    func setup(encryptedSize: UInt32, unencryptedSize: UInt32) -> Attachment.IDType {
+        return setup(
             encryptedUploadSize: encryptedSize,
             mockAttachment: MockAttachmentStream.mock(
                 streamInfo: .mock(
                     encryptedByteCount: encryptedSize,
-                    unencryptedByteCount: unencryptedSize
-                )
-            ).attachment
+                    unencryptedByteCount: unencryptedSize,
+                ),
+            ).attachment,
         )
     }
 
     func setup(
         encryptedUploadSize: UInt32,
-        mockAttachment: Attachment
-    ) {
-
-        self.mockAttachmentStore.mockFetcher = { _ in
-            return mockAttachment
-        }
+        mockAttachment: Attachment,
+    ) -> Attachment.IDType {
         self.mockFileSystem.size = Int(clamping: encryptedUploadSize)
 
-        mockServiceManager.mockUrlSessionBuilder = { (info: SignalServiceInfo, endpoint: OWSURLSessionEndpoint, config: URLSessionConfiguration? ) in
+        mockServiceManager.mockUrlSessionBuilder = { (info: SignalServiceInfo, endpoint: OWSURLSessionEndpoint, config: URLSessionConfiguration?) in
             return self.mockURLSession
         }
         mockServiceManager.mockCDNUrlSessionBuilder = { _ in
@@ -160,23 +156,33 @@ class AttachmentUploadManagerMockHelper {
             self.capturedRequests.append(.uploadTask(request))
             return try await requestBlock(request, data, progress)
         }
+
+        return insertMockAttachment(mockAttachment)
+    }
+
+    func insertMockAttachment(_ attachment: Attachment) -> Attachment.IDType {
+        return mockDB.write { tx in
+            var record = Attachment.Record(attachment: attachment)
+            try! record.insert(tx.database)
+            return record.sqliteId!
+        }
     }
 
     func addUploadFormAndLocationRequestMock(
         cdn: CDNEndpoint,
         formStatusCode: Int = 200,
         fetchLocationStatusCode: Int = 201,
-        _ uploadMockBuilder: (_ auth: String, _ formUploadLocation: String, _ fetchedUploadLocation: String) -> Void
+        _ uploadMockBuilder: (_ auth: String, _ formUploadLocation: String, _ fetchedUploadLocation: String) -> Void,
     ) -> MockUploadAttempt {
         addFormRequestMock(
             cdn: cdn,
-            statusCode: formStatusCode
+            statusCode: formStatusCode,
         ) { auth, formUploadLoaction in
             addFetchedUploadLocationMock(
                 cdn: cdn,
                 auth: auth,
                 signedUploadLocation: formUploadLoaction,
-                statusCode: fetchLocationStatusCode
+                statusCode: fetchLocationStatusCode,
             ) { fetchedUploadLocation in
                 uploadMockBuilder(auth, formUploadLoaction, fetchedUploadLocation)
             }
@@ -186,7 +192,7 @@ class AttachmentUploadManagerMockHelper {
     private func addFormRequestMock(
         cdn: CDNEndpoint,
         statusCode: Int = 200,
-        _ authedMockBuilder: (_ auth: String, _ location: String) -> (String)
+        _ authedMockBuilder: (_ auth: String, _ location: String) -> (String),
     ) -> MockUploadAttempt {
         let authString = UUID().uuidString
         // Create a random, yet identifiable URL.  Helps with debugging the captured requests.
@@ -196,7 +202,7 @@ class AttachmentUploadManagerMockHelper {
             headers: headers,
             signedUploadLocation: location,
             cdnKey: UUID().uuidString,
-            cdnNumber: cdn.rawValue
+            cdnNumber: cdn.rawValue,
         )
         authFormRequestBlock.append(.uploadForm({ request in
             self.activeUploadRequestMocks = self.authToUploadRequestMockMap[authString] ?? .init()
@@ -204,7 +210,7 @@ class AttachmentUploadManagerMockHelper {
                 requestUrl: request.url,
                 status: statusCode,
                 headers: HttpHeaders(),
-                bodyData: try! JSONEncoder().encode(form)
+                bodyData: try! JSONEncoder().encode(form),
             )
         }))
         return .init(
@@ -212,7 +218,7 @@ class AttachmentUploadManagerMockHelper {
             auth: authString,
             form: form,
             formUploadLocation: location,
-            fetchedUploadLocation: authedMockBuilder(authString, location)
+            fetchedUploadLocation: authedMockBuilder(authString, location),
         )
     }
 
@@ -221,20 +227,20 @@ class AttachmentUploadManagerMockHelper {
         auth: String,
         signedUploadLocation: String,
         statusCode: Int,
-        _ resumedLocationMockBuilder: ((String) -> Void)
+        _ resumedLocationMockBuilder: (String) -> Void,
     ) -> String {
-        let location =  {
+        let location = {
             switch cdn {
             case .cdn2:
                 // Create a random, yet identifiable URL.  Helps with debugging the captured requests.
                 let fetchedUploadLocation = "https://upload/fetchedUploadLocation/\(UUID().uuidString)"
                 enqueue(auth: auth, request: .uploadLocation({ request in
-                    let headers = [ "Location": fetchedUploadLocation ]
+                    let headers = ["Location": fetchedUploadLocation]
                     return HTTPResponse(
                         requestUrl: request.url!,
                         status: statusCode,
                         headers: HttpHeaders(httpHeaders: headers, overwriteOnConflict: true),
-                        bodyData: nil
+                        bodyData: nil,
                     )
                 }))
                 return fetchedUploadLocation
@@ -283,7 +289,7 @@ class AttachmentUploadManagerMockHelper {
                     requestUrl: request.url!,
                     status: statusCode,
                     headers: HttpHeaders(httpHeaders: headers, overwriteOnConflict: true),
-                    bodyData: nil
+                    bodyData: nil,
                 )
             }))
         case .cdn3:
@@ -310,7 +316,7 @@ class AttachmentUploadManagerMockHelper {
                     requestUrl: request.url!,
                     status: statusCode,
                     headers: HttpHeaders(httpHeaders: headers, overwriteOnConflict: true),
-                    bodyData: nil
+                    bodyData: nil,
                 )
             }))
         }
@@ -338,14 +344,14 @@ class AttachmentUploadManagerMockHelper {
                     requestUrl: URL(string: location)!,
                     responseStatus: code,
                     responseHeaders: HttpHeaders(),
-                    responseData: nil
+                    responseData: nil,
                 ))
             case .success:
                 return HTTPResponse(
                     requestUrl: request.url!,
                     status: 200,
                     headers: HttpHeaders(),
-                    bodyData: nil
+                    bodyData: nil,
                 )
             }
         }))

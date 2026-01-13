@@ -15,10 +15,12 @@ public class RegistrationStateChangeManagerImpl: RegistrationStateChangeManager 
     private let backupCDNCredentialStore: BackupCDNCredentialStore
     private let backupSubscriptionManager: BackupSubscriptionManager
     private let backupTestFlightEntitlementManager: BackupTestFlightEntitlementManager
+    private let blockedRecipientStore: BlockedRecipientStore
     private var chatConnectionManager: any ChatConnectionManager {
         // TODO: Fix circular dependency.
         return DependenciesBridge.shared.chatConnectionManager
     }
+
     private let cron: Cron
     private let db: DB
     private let dmConfigurationStore: DisappearingMessagesConfigurationStore
@@ -28,7 +30,7 @@ public class RegistrationStateChangeManagerImpl: RegistrationStateChangeManager 
     private let paymentsEvents: PaymentsEvents
     private let recipientManager: any SignalRecipientManager
     private let recipientMerger: RecipientMerger
-    private let senderKeyStore: SenderKeyStore
+    private let senderKeyStore: OldSenderKeyStore
     private let signalProtocolStoreManager: SignalProtocolStoreManager
     private let storageServiceManager: StorageServiceManager
     private let tsAccountManager: TSAccountManager
@@ -41,6 +43,7 @@ public class RegistrationStateChangeManagerImpl: RegistrationStateChangeManager 
         backupCDNCredentialStore: BackupCDNCredentialStore,
         backupSubscriptionManager: BackupSubscriptionManager,
         backupTestFlightEntitlementManager: BackupTestFlightEntitlementManager,
+        blockedRecipientStore: BlockedRecipientStore,
         cron: Cron,
         db: DB,
         dmConfigurationStore: DisappearingMessagesConfigurationStore,
@@ -50,18 +53,19 @@ public class RegistrationStateChangeManagerImpl: RegistrationStateChangeManager 
         paymentsEvents: PaymentsEvents,
         recipientManager: any SignalRecipientManager,
         recipientMerger: RecipientMerger,
-        senderKeyStore: SenderKeyStore,
+        senderKeyStore: OldSenderKeyStore,
         signalProtocolStoreManager: SignalProtocolStoreManager,
         storageServiceManager: StorageServiceManager,
         tsAccountManager: TSAccountManager,
         udManager: OWSUDManager,
-        versionedProfiles: VersionedProfiles
+        versionedProfiles: VersionedProfiles,
     ) {
         self.authCredentialStore = authCredentialStore
         self.backupAttachmentUploadEraStore = backupAttachmentUploadEraStore
         self.backupCDNCredentialStore = backupCDNCredentialStore
         self.backupSubscriptionManager = backupSubscriptionManager
         self.backupTestFlightEntitlementManager = backupTestFlightEntitlementManager
+        self.blockedRecipientStore = blockedRecipientStore
         self.cron = cron
         self.db = db
         self.dmConfigurationStore = dmConfigurationStore
@@ -88,7 +92,7 @@ public class RegistrationStateChangeManagerImpl: RegistrationStateChangeManager 
         aci: Aci,
         pni: Pni,
         authToken: String,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         tsAccountManager.initializeLocalIdentifiers(
             e164: e164,
@@ -96,7 +100,7 @@ public class RegistrationStateChangeManagerImpl: RegistrationStateChangeManager 
             pni: pni,
             deviceId: .primary,
             serverAuthToken: authToken,
-            tx: tx
+            tx: tx,
         )
 
         didUpdateLocalIdentifiers(e164: e164, aci: aci, pni: pni, deviceId: .primary, tx: tx)
@@ -113,7 +117,7 @@ public class RegistrationStateChangeManagerImpl: RegistrationStateChangeManager 
         pni: Pni,
         authToken: String,
         deviceId: DeviceId,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         tsAccountManager.initializeLocalIdentifiers(
             e164: e164,
@@ -121,7 +125,7 @@ public class RegistrationStateChangeManagerImpl: RegistrationStateChangeManager 
             pni: pni,
             deviceId: deviceId,
             serverAuthToken: authToken,
-            tx: tx
+            tx: tx,
         )
         didUpdateLocalIdentifiers(e164: e164, aci: aci, pni: pni, deviceId: deviceId, tx: tx)
 
@@ -135,7 +139,7 @@ public class RegistrationStateChangeManagerImpl: RegistrationStateChangeManager 
         _ e164: E164,
         aci: Aci,
         pni: Pni,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         tsAccountManager.changeLocalNumber(newE164: e164, aci: aci, pni: pni, tx: tx)
 
@@ -201,18 +205,17 @@ public class RegistrationStateChangeManagerImpl: RegistrationStateChangeManager 
         localAci: Aci,
         discoverability: PhoneNumberDiscoverability?,
         wasPrimaryDevice: Bool,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         tsAccountManager.resetForReregistration(
             localNumber: localPhoneNumber,
             localAci: localAci,
             discoverability: discoverability,
             wasPrimaryDevice: wasPrimaryDevice,
-            tx: tx
+            tx: tx,
         )
 
-        signalProtocolStoreManager.signalProtocolStore(for: .aci).sessionStore.resetSessionStore(tx: tx)
-        signalProtocolStoreManager.signalProtocolStore(for: .pni).sessionStore.resetSessionStore(tx: tx)
+        signalProtocolStoreManager.sessionStore.deleteAllSessions(tx: tx)
         senderKeyStore.resetSenderKeyStore(transaction: tx)
         udManager.removeSenderCertificates(tx: tx)
         versionedProfiles.clearProfileKeyCredentials(tx: tx)
@@ -243,7 +246,7 @@ public class RegistrationStateChangeManagerImpl: RegistrationStateChangeManager 
 
     public func setIsTransferComplete(
         sendStateUpdateNotification: Bool,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         guard tsAccountManager.setIsTransferInProgress(false, tx: tx) else {
             return
@@ -323,7 +326,7 @@ public class RegistrationStateChangeManagerImpl: RegistrationStateChangeManager 
         aci: Aci,
         pni: Pni,
         deviceId: DeviceId,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         udManager.removeSenderCertificates(tx: tx)
         identityManager.clearShouldSharePhoneNumberForEveryone(tx: tx)
@@ -338,7 +341,7 @@ public class RegistrationStateChangeManagerImpl: RegistrationStateChangeManager 
             aci: aci,
             phoneNumber: e164,
             pni: pni,
-            tx: tx
+            tx: tx,
         )
         // Always add the .primary DeviceId as well as our own. This is how linked
         // devices know to send their initial sync messages to the primary.
@@ -347,8 +350,11 @@ public class RegistrationStateChangeManagerImpl: RegistrationStateChangeManager 
             deviceIdsToAdd: [deviceId, .primary],
             deviceIdsToRemove: [],
             shouldUpdateStorageService: false,
-            tx: tx
+            tx: tx,
         )
+        // Always make sure we haven't blocked ourselves. (It's logically
+        // impossible to do so, so we set the bit in the database directly.)
+        blockedRecipientStore.setBlocked(false, recipientId: recipient.id, tx: tx)
     }
 
     // MARK: Notifications
@@ -356,14 +362,14 @@ public class RegistrationStateChangeManagerImpl: RegistrationStateChangeManager 
     private func postRegistrationStateDidChangeNotification() {
         NotificationCenter.default.postOnMainThread(
             name: .registrationStateDidChange,
-            object: nil
+            object: nil,
         )
     }
 
     private func postLocalNumberDidChangeNotification() {
         NotificationCenter.default.postOnMainThread(
             name: .localNumberDidChange,
-            object: nil
+            object: nil,
         )
     }
 }
@@ -376,7 +382,7 @@ extension RegistrationStateChangeManagerImpl {
 
     public func registerForTests(
         localIdentifiers: LocalIdentifiers,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         owsAssertDebug(CurrentAppContext().isRunningTests)
 
@@ -386,14 +392,14 @@ extension RegistrationStateChangeManagerImpl {
             pni: localIdentifiers.pni!,
             deviceId: .primary,
             serverAuthToken: "",
-            tx: tx
+            tx: tx,
         )
         didUpdateLocalIdentifiers(
             e164: E164(localIdentifiers.phoneNumber)!,
             aci: localIdentifiers.aci,
             pni: localIdentifiers.pni!,
             deviceId: .primary,
-            tx: tx
+            tx: tx,
         )
     }
 }

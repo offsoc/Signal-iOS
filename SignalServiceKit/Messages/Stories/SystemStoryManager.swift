@@ -37,25 +37,27 @@ public class OnboardingStoryManagerStoryMessageFactory {
     public class func createFromSystemAuthor(
         attachmentSource: AttachmentDataSource,
         timestamp: UInt64,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) throws -> StoryMessage {
         return try StoryMessage.createFromSystemAuthor(
             attachmentSource: attachmentSource,
             timestamp: timestamp,
-            transaction: transaction
+            transaction: transaction,
         )
     }
 
     public class func validateAttachmentContents(
         dataSource: DataSourcePath,
-        mimeType: String
+        mimeType: String,
     ) async throws -> AttachmentDataSource {
-        return try await DependenciesBridge.shared.attachmentContentValidator.validateContents(
-            dataSource: dataSource,
+        let attachmentContentValidator = DependenciesBridge.shared.attachmentContentValidator
+        let pendingAttachment = try await attachmentContentValidator.validateDataSourceContents(
+            dataSource,
             mimeType: mimeType,
             renderingFlag: .default,
-            sourceFilename: nil
+            sourceFilename: nil,
         )
+        return .pendingAttachment(pendingAttachment)
     }
 }
 
@@ -71,18 +73,18 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
 
     private let taskQueue = SerialTaskQueue()
 
-    #if TESTABLE_BUILD
+#if TESTABLE_BUILD
     func flush() async throws {
         try await taskQueue.enqueue(operation: {}).value
     }
-    #endif
+#endif
 
     public convenience init(appReadiness: AppReadiness, messageProcessor: MessageProcessor) {
         self.init(
             appReadiness: appReadiness,
             fileSystem: OnboardingStoryManagerFilesystem.self,
             messageProcessor: Wrappers.MessageProcessor(messageProcessor),
-            storyMessageFactory: OnboardingStoryManagerStoryMessageFactory.self
+            storyMessageFactory: OnboardingStoryManagerStoryMessageFactory.self,
         )
     }
 
@@ -90,7 +92,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
         appReadiness: AppReadiness,
         fileSystem: OnboardingStoryManagerFilesystem.Type,
         messageProcessor: any Shims.MessageProcessor,
-        storyMessageFactory: OnboardingStoryManagerStoryMessageFactory.Type
+        storyMessageFactory: OnboardingStoryManagerStoryMessageFactory.Type,
     ) {
         self.fileSystem = fileSystem
         self.messageProcessor = messageProcessor
@@ -157,14 +159,14 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
 
     public func setHasViewedOnboardingStory(
         source: OnboardingStoryViewSource,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) throws {
         switch source {
         case .local(let timestamp, let updateStorageService):
             try setOnboardingStoryViewedOnThisDevice(
                 atTimestamp: timestamp,
                 shouldUpdateStorageService: updateStorageService,
-                transaction: transaction
+                transaction: transaction,
             )
         case .otherDevice:
             setHasViewedOnboardingStoryOnAnotherDevice(transaction: transaction)
@@ -181,7 +183,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
     public func isGroupStoryEducationSheetViewed(tx: DBReadTransaction) -> Bool {
         return groupStoryEducationStore.hasValue(
             Constants.kvStoreGroupStoryEducationSheetViewedKey,
-            transaction: tx
+            transaction: tx,
         )
     }
 
@@ -189,7 +191,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
         groupStoryEducationStore.setBool(
             true,
             key: Constants.kvStoreGroupStoryEducationSheetViewedKey,
-            transaction: tx
+            transaction: tx,
         )
     }
 
@@ -261,7 +263,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
             self,
             selector: #selector(registrationStateDidChange),
             name: .registrationStateDidChange,
-            object: nil
+            object: nil,
         )
     }
 
@@ -305,7 +307,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
             self,
             selector: #selector(didEnterBackground),
             name: .OWSApplicationDidEnterBackground,
-            object: nil
+            object: nil,
         )
 
         // Observe view state changes for the stories.
@@ -322,7 +324,8 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
             in: SSKEnvironment.shared.databaseStorageRef.grdbStorage.pool,
             onError: { error in
                 owsFailDebug("Failed to observe story view state: \(error))")
-            }, onChange: { [weak self] changedModels in
+            },
+            onChange: { [weak self] changedModels in
                 guard hasEmitted else {
                     hasEmitted = true
                     return
@@ -340,7 +343,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
                         try self?.setOnboardingStoryViewedOnThisDevice(
                             atTimestamp: viewedTimestamp,
                             shouldUpdateStorageService: true,
-                            transaction: $0
+                            transaction: $0,
                         )
                     }
                     self?.cleanUpOnboardingStoryIfNeeded()
@@ -348,7 +351,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
                 } catch {
                     return
                 }
-            }
+            },
         )
     }
 
@@ -432,7 +435,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
                 try? self.cleanUpOnboardingStoriesIfNeeded(
                     messageUniqueIds: status.messageUniqueIds,
                     forceDeleteIfDownloaded: forceDeletingIfDownloaded,
-                    transaction: transaction
+                    transaction: transaction,
                 )
             }
             return status
@@ -449,7 +452,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
     private func cleanUpOnboardingStoriesIfNeeded(
         messageUniqueIds: [String]?,
         forceDeleteIfDownloaded: Bool,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) throws {
         var forceDelete = forceDeleteIfDownloaded
 
@@ -481,7 +484,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
             return
         }
 
-        guard let messageUniqueIds = messageUniqueIds, !messageUniqueIds.isEmpty else {
+        guard let messageUniqueIds, !messageUniqueIds.isEmpty else {
             throw OWSAssertionError("No messages")
         }
         let stories = StoryFinder.listStoriesWithUniqueIds(messageUniqueIds, transaction: transaction)
@@ -492,7 +495,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
                 try self.setOnboardingStoryViewedOnThisDevice(
                     atTimestamp: 0,
                     shouldUpdateStorageService: true,
-                    transaction: transaction
+                    transaction: transaction,
                 )
             }
             return
@@ -510,7 +513,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
     // MARK: Downloading
 
     private func fetchFilenames(
-        urlSession: OWSURLSessionProtocol
+        urlSession: OWSURLSessionProtocol,
     ) async throws -> [String] {
         let response = try await urlSession.performRequest(Constants.manifestPath, method: .get)
         guard
@@ -534,7 +537,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
 
     private func downloadOnboardingAsset(
         urlSession: OWSURLSessionProtocol,
-        url: String
+        url: String,
     ) async throws -> AttachmentDataSource {
         let result = try await urlSession.performDownload(url, method: .get)
         let resultUrl = result.downloadUrl
@@ -551,22 +554,22 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
         )
         return try await storyMessageFactory.validateAttachmentContents(
             dataSource: dataSource,
-            mimeType: Constants.imageMimeType
+            mimeType: Constants.imageMimeType,
         )
     }
 
     /// Returns unique Ids for the created messages. Fails if any one message creation fails.
     private func createStoryMessages(
         attachmentSources: [AttachmentDataSource],
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) throws -> [String] {
         let baseTimestamp = Date().ows_millisecondsSince1970
-        let ids = try attachmentSources.lazy.enumerated().map { (i, attachmentSource) throws -> String in
+        let ids = try attachmentSources.lazy.enumerated().map { i, attachmentSource throws -> String in
             let message = try storyMessageFactory.createFromSystemAuthor(
                 attachmentSource: attachmentSource,
                 // Ensure timestamps are unique since they are sometimes used for uniquing.
                 timestamp: baseTimestamp + UInt64(i),
-                transaction: transaction
+                transaction: transaction,
             )
             return message.uniqueId
         }
@@ -620,7 +623,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
         try kvStore.setData(
             JSONEncoder().encode(OnboardingStoryViewStatus(status: .viewedOnAnotherDevice, viewedTimestamp: nil)),
             key: Constants.kvStoreOnboardingStoryViewStatusKey,
-            transaction: transaction
+            transaction: transaction,
         )
         NotificationCenter.default.postOnMainThread(name: .onboardingStoryStateDidChange, object: nil)
     }
@@ -628,7 +631,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
     private func setOnboardingStoryViewedOnThisDevice(
         atTimestamp timestamp: UInt64,
         shouldUpdateStorageService: Bool,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) throws {
         let oldStatus = onboardingStoryViewStatus(transaction: transaction)
         guard oldStatus.status == .notViewed else {
@@ -637,7 +640,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
         try kvStore.setData(
             JSONEncoder().encode(OnboardingStoryViewStatus(status: .viewedOnThisDevice, viewedTimestamp: timestamp)),
             key: Constants.kvStoreOnboardingStoryViewStatusKey,
-            transaction: transaction
+            transaction: transaction,
         )
         if shouldUpdateStorageService {
             SSKEnvironment.shared.storageServiceManagerRef.recordPendingLocalAccountUpdates()
@@ -665,15 +668,15 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
         return status
     }
 
-    internal func markOnboardingStoryDownloaded(
+    func markOnboardingStoryDownloaded(
         messageUniqueIds: [String],
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) throws {
         let status = OnboardingStoryDownloadStatus(messageUniqueIds: messageUniqueIds)
         try kvStore.setData(
             JSONEncoder().encode(status),
             key: Constants.kvStoreOnboardingStoryDownloadStatusKey,
-            transaction: transaction
+            transaction: transaction,
         )
         DispatchQueue.main.async {
             self.beginObservingOnboardingStoryEventsIfNeeded(downloadStatus: status)
@@ -693,7 +696,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
         NotificationCenter.default.postOnMainThread(name: .onboardingStoryStateDidChange, object: nil)
     }
 
-    internal enum Constants {
+    enum Constants {
         static let kvStoreOnboardingStoryIsReadKey = "OnboardingStoryIsRead"
         static let kvStoreOnboardingStoryViewStatusKey = "OnboardingStoryViewStatus"
         static let kvStoreOnboardingStoryDownloadStatusKey = "OnboardingStoryStatus"
@@ -712,6 +715,7 @@ public class SystemStoryManager: SystemStoryManagerProtocol {
                 .appendingPathComponent(filename)
                 + Constants.imageExtension
         }
+
         static let imageExtension = ".jpg"
         static let imageMimeType = MimeType.imageJpeg.rawValue
         static let imageWidth = 1125

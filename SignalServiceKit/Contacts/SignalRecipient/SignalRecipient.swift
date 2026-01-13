@@ -28,10 +28,15 @@ public struct SignalRecipient: FetchableRecord, PersistableRecord, Codable {
         public var stringValue: String
 
         /// Tracks whether or not this number is discoverable on CDS.
-        /// 
+        ///
         /// - Important: This property is usually stale on linked devices because
         /// they don't perform CDS syncs at regular intervals.
         public var isDiscoverable: Bool
+    }
+
+    public enum Status: Int64, Codable {
+        case unspecified = 0
+        case whitelisted = 1
     }
 
     public typealias RowId = Int64
@@ -51,8 +56,9 @@ public struct SignalRecipient: FetchableRecord, PersistableRecord, Codable {
     /// it's safe to check it at time-of-fetch and throw an error.
     public var pni: Pni?
     public var phoneNumber: PhoneNumber?
-    fileprivate(set) public var deviceIds: [DeviceId]
-    fileprivate(set) public var unregisteredAtTimestamp: UInt64?
+    public fileprivate(set) var deviceIds: [DeviceId]
+    public fileprivate(set) var unregisteredAtTimestamp: UInt64?
+    public var status: Status
 
     public var aci: Aci? {
         get { Aci.parseFrom(aciString: aciString) }
@@ -70,11 +76,11 @@ public struct SignalRecipient: FetchableRecord, PersistableRecord, Codable {
         let normalizedAddress = NormalizedDatabaseRecordAddress(
             aci: aci,
             phoneNumber: phoneNumber?.stringValue,
-            pni: pni
+            pni: pni,
         )
         return SignalServiceAddress(
             serviceId: normalizedAddress?.serviceId,
-            phoneNumber: normalizedAddress?.phoneNumber
+            phoneNumber: normalizedAddress?.phoneNumber,
         )
     }
 
@@ -84,22 +90,24 @@ public struct SignalRecipient: FetchableRecord, PersistableRecord, Codable {
         pni: Pni? = nil,
         deviceIds: [DeviceId] = [],
         unregisteredAtTimestamp: UInt64?? = nil,
+        status: Status = .unspecified,
         tx: DBWriteTransaction,
     ) throws(GRDB.DatabaseError) -> Self {
         do {
             return try SignalRecipient.fetchOne(
                 tx.database,
                 sql: """
-                    INSERT INTO \(SignalRecipient.databaseTableName) (
-                        \(signalRecipientColumn: .recordType),
-                        \(signalRecipientColumn: .uniqueId),
-                        \(signalRecipientColumn: .aciString),
-                        \(signalRecipientColumn: .phoneNumber),
-                        \(signalRecipientColumn: .pni),
-                        \(signalRecipientColumn: .deviceIds),
-                        \(signalRecipientColumn: .unregisteredAtTimestamp)
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *
-                    """,
+                INSERT INTO \(SignalRecipient.databaseTableName) (
+                    \(signalRecipientColumn: .recordType),
+                    \(signalRecipientColumn: .uniqueId),
+                    \(signalRecipientColumn: .aciString),
+                    \(signalRecipientColumn: .phoneNumber),
+                    \(signalRecipientColumn: .pni),
+                    \(signalRecipientColumn: .deviceIds),
+                    \(signalRecipientColumn: .unregisteredAtTimestamp),
+                    \(signalRecipientColumn: .status)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *
+                """,
                 arguments: [
                     SDSRecordType.signalRecipient.rawValue,
                     UUID().uuidString,
@@ -108,6 +116,7 @@ public struct SignalRecipient: FetchableRecord, PersistableRecord, Codable {
                     pni?.serviceIdUppercaseString,
                     Data(deviceIds.map(\.uint8Value)),
                     unregisteredAtTimestamp ?? (deviceIds.isEmpty ? Constants.distantPastUnregisteredTimestamp : nil),
+                    status.rawValue,
                 ],
             )!
         } catch {
@@ -125,6 +134,7 @@ public struct SignalRecipient: FetchableRecord, PersistableRecord, Codable {
         case deviceIds = "devices"
         case unregisteredAtTimestamp
         case isPhoneNumberDiscoverable
+        case status
     }
 
     public init(from decoder: Decoder) throws {
@@ -143,7 +153,7 @@ public struct SignalRecipient: FetchableRecord, PersistableRecord, Codable {
         if let phoneNumberStringValue = try container.decodeIfPresent(String.self, forKey: .phoneNumber) {
             phoneNumber = PhoneNumber(
                 stringValue: phoneNumberStringValue,
-                isDiscoverable: try container.decodeIfPresent(Bool.self, forKey: .isPhoneNumberDiscoverable) ?? false
+                isDiscoverable: try container.decodeIfPresent(Bool.self, forKey: .isPhoneNumberDiscoverable) ?? false,
             )
         } else {
             phoneNumber = nil
@@ -151,6 +161,7 @@ public struct SignalRecipient: FetchableRecord, PersistableRecord, Codable {
         let encodedDeviceIds = try container.decode(Data.self, forKey: .deviceIds)
         deviceIds = encodedDeviceIds.compactMap(DeviceId.init(validating:))
         unregisteredAtTimestamp = try container.decodeIfPresent(UInt64.self, forKey: .unregisteredAtTimestamp)
+        status = try container.decode(Status.self, forKey: .status)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -164,6 +175,7 @@ public struct SignalRecipient: FetchableRecord, PersistableRecord, Codable {
         try container.encodeIfPresent(phoneNumber?.isDiscoverable, forKey: .isPhoneNumberDiscoverable)
         try container.encode(Data(deviceIds.map(\.uint8Value)), forKey: .deviceIds)
         try container.encodeIfPresent(unregisteredAtTimestamp, forKey: .unregisteredAtTimestamp)
+        try container.encode(status, forKey: .status)
     }
 
     // MARK: - Fetching
@@ -195,7 +207,7 @@ extension SignalRecipientManagerImpl {
     func setDeviceIds(
         _ deviceIds: Set<DeviceId>,
         for recipient: inout SignalRecipient,
-        shouldUpdateStorageService: Bool
+        shouldUpdateStorageService: Bool,
     ) {
         recipient.deviceIds = deviceIds.sorted()
         // Clear the timestamp if we're registered. If we're unregistered, set it if we don't already have one.
@@ -203,14 +215,14 @@ extension SignalRecipientManagerImpl {
         setUnregisteredAtTimestamp(
             recipient.isRegistered ? nil : (recipient.unregisteredAtTimestamp ?? NSDate.ows_millisecondTimeStamp()),
             for: &recipient,
-            shouldUpdateStorageService: shouldUpdateStorageService
+            shouldUpdateStorageService: shouldUpdateStorageService,
         )
     }
 
     func setUnregisteredAtTimestamp(
         _ unregisteredAtTimestamp: UInt64?,
         for recipient: inout SignalRecipient,
-        shouldUpdateStorageService: Bool
+        shouldUpdateStorageService: Bool,
     ) {
         if recipient.unregisteredAtTimestamp == unregisteredAtTimestamp {
             return
@@ -229,6 +241,7 @@ public extension String.StringInterpolation {
     mutating func appendInterpolation(signalRecipientColumn column: SignalRecipient.CodingKeys) {
         appendLiteral(column.rawValue)
     }
+
     mutating func appendInterpolation(signalRecipientColumnFullyQualified column: SignalRecipient.CodingKeys) {
         appendLiteral("\(SignalRecipient.databaseTableName).\(column.rawValue)")
     }

@@ -34,7 +34,7 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
         newOversizeText: MessageEdits.OversizeTextSource?,
         newLinkPreview: MessageEdits.LinkPreviewSource?,
         quotedReplyEdit: MessageEdits.Edit<Void>,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) throws {
         try reconcileQuotedReply(
             editTarget: editTarget,
@@ -44,7 +44,7 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
             priorRevisionRowId: priorRevisionRowId,
             threadRowId: threadRowId,
             quotedReplyEdit: quotedReplyEdit,
-            tx: tx
+            tx: tx,
         )
         try reconcileLinkPreview(
             editTarget: editTarget,
@@ -54,7 +54,7 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
             priorRevisionRowId: priorRevisionRowId,
             threadRowId: threadRowId,
             newLinkPreview: newLinkPreview,
-            tx: tx
+            tx: tx,
         )
         try reconcileOversizeText(
             editTarget: editTarget,
@@ -64,7 +64,7 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
             priorRevisionRowId: priorRevisionRowId,
             threadRowId: threadRowId,
             newOversizeText: newOversizeText,
-            tx: tx
+            tx: tx,
         )
         try reconcileBodyMediaAttachments(
             editTarget: editTarget,
@@ -73,7 +73,7 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
             priorRevision: priorRevision,
             priorRevisionRowId: priorRevisionRowId,
             threadRowId: threadRowId,
-            tx: tx
+            tx: tx,
         )
     }
 
@@ -87,15 +87,21 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
         priorRevisionRowId: Int64,
         threadRowId: Int64,
         quotedReplyEdit: MessageEdits.Edit<Void>,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) throws {
         // The editTarget's copy of the message has no edits applied.
         let quotedReplyPriorToEdit = editTarget.message.quotedMessage
 
-        let attachmentReferencePriorToEdit = attachmentStore.quotedThumbnailAttachment(
-            for: editTarget.message,
-            tx: tx
-        )
+        let attachmentReferencePriorToEdit: AttachmentReference?
+        switch attachmentStore.quotedAttachmentReference(
+            parentMessage: editTarget.message,
+            tx: tx,
+        ) {
+        case nil, .stub:
+            attachmentReferencePriorToEdit = nil
+        case .thumbnail(let attachmentReference):
+            attachmentReferencePriorToEdit = attachmentReference
+        }
 
         if let quotedReplyPriorToEdit {
             // If we had a quoted reply, always keep it on the prior revision.
@@ -115,7 +121,7 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
                     newOwnerMessageRowId: priorRevisionRowId,
                     newOwnerThreadRowId: threadRowId,
                     newOwnerIsPastEditRevision: true,
-                    tx: tx
+                    tx: tx,
                 )
             default:
                 throw OWSAssertionError("Invalid attachment reference type!")
@@ -135,7 +141,7 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
                 try attachmentStore.update(
                     attachmentReferencePriorToEdit,
                     withReceivedAtTimestamp: latestRevision.receivedAtTimestamp,
-                    tx: tx
+                    tx: tx,
                 )
             }
         case .change:
@@ -145,7 +151,7 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
                 try attachmentStore.removeAllOwners(
                     withId: .quotedReplyAttachment(messageRowId: latestRevisionRowId),
                     for: attachmentReferencePriorToEdit.attachmentRowId,
-                    tx: tx
+                    tx: tx,
                 )
             }
             // No need to touch the TSMessage.quotedReply as it is already nil by default.
@@ -160,14 +166,14 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
         priorRevisionRowId: Int64,
         threadRowId: Int64,
         newLinkPreview: MessageEdits.LinkPreviewSource?,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) throws {
         // The editTarget's copy of the message has no edits applied.
         let linkPreviewPriorToEdit = editTarget.message.linkPreview
 
-        let attachmentReferencePriorToEdit = attachmentStore.fetchFirstReference(
+        let attachmentReferencePriorToEdit = attachmentStore.fetchAnyReference(
             owner: .messageLinkPreview(messageRowId: editTarget.message.sqliteRowId!),
-            tx: tx
+            tx: tx,
         )
 
         if let linkPreviewPriorToEdit {
@@ -188,7 +194,7 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
                     newOwnerMessageRowId: priorRevisionRowId,
                     newOwnerThreadRowId: threadRowId,
                     newOwnerIsPastEditRevision: true,
-                    tx: tx
+                    tx: tx,
                 )
             default:
                 throw OWSAssertionError("Invalid attachment reference type!")
@@ -199,66 +205,63 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
             try attachmentStore.removeAllOwners(
                 withId: .messageLinkPreview(messageRowId: latestRevisionRowId),
                 for: attachmentReferencePriorToEdit.attachmentRowId,
-                tx: tx
+                tx: tx,
             )
         }
 
         // Create and assign the new link preview.
-        let builder = LinkPreviewBuilderImpl(
-            attachmentManager: attachmentManager,
-            attachmentValidator: attachmentValidator
-        )
         switch newLinkPreview {
         case .none:
             break
         case .draft(let draft):
-            let builder = try linkPreviewManager.buildLinkPreview(
-                from: draft,
-                builder: builder,
-                tx: tx
+            let validatedLinkPreview = try linkPreviewManager.validateDataSource(
+                dataSource: draft,
+                tx: tx,
             )
-            latestRevision.update(with: builder.info, transaction: tx)
-            try builder.finalize(
-                owner: .messageLinkPreview(.init(
-                    messageRowId: latestRevisionRowId,
-                    receivedAtTimestamp: latestRevision.receivedAtTimestamp,
-                    threadRowId: threadRowId,
-                    isPastEditRevision: latestRevision.isPastEditRevision()
-                )),
-                tx: tx
-            )
+
+            latestRevision.update(with: validatedLinkPreview.preview, transaction: tx)
+
+            if let imageDataSource = validatedLinkPreview.imageDataSource {
+                try attachmentManager.createAttachmentStream(
+                    from: OwnedAttachmentDataSource(
+                        dataSource: imageDataSource,
+                        owner: .messageLinkPreview(.init(
+                            messageRowId: latestRevisionRowId,
+                            receivedAtTimestamp: latestRevision.receivedAtTimestamp,
+                            threadRowId: threadRowId,
+                            isPastEditRevision: latestRevision.isPastEditRevision(),
+                        )),
+                    ),
+                    tx: tx,
+                )
+            }
         case .proto(let preview, let dataMessage):
-            let linkPreviewBuilder: OwnedAttachmentBuilder<OWSLinkPreview>
             do {
-                linkPreviewBuilder = try linkPreviewManager.validateAndBuildLinkPreview(
+                let validatedLinkPreview = try linkPreviewManager.validateAndBuildLinkPreview(
                     from: preview,
                     dataMessage: dataMessage,
-                    builder: builder,
-                    tx: tx
                 )
-            } catch let error as LinkPreviewError {
-                switch error {
-                case .invalidPreview:
-                    // Just drop the link preview, but keep the message
-                    Logger.info("Dropping invalid link preview; keeping message edit")
-                    return
-                case .noPreview, .fetchFailure, .featureDisabled:
-                    owsFailDebug("Invalid link preview error on incoming proto")
-                    return
+
+                latestRevision.update(with: validatedLinkPreview.preview, transaction: tx)
+
+                if let linkPreviewImageProto = validatedLinkPreview.imageProto {
+                    try attachmentManager.createAttachmentPointer(
+                        from: OwnedAttachmentPointerProto(
+                            proto: linkPreviewImageProto,
+                            owner: .messageLinkPreview(.init(
+                                messageRowId: latestRevisionRowId,
+                                receivedAtTimestamp: latestRevision.receivedAtTimestamp,
+                                threadRowId: threadRowId,
+                                isPastEditRevision: latestRevision.isPastEditRevision(),
+                            )),
+                        ),
+                        tx: tx,
+                    )
                 }
-            } catch let error {
-                throw error
+            } catch LinkPreviewError.invalidPreview {
+                // Just drop the link preview, but keep the message
+                Logger.warn("Dropping invalid link preview; keeping message edit")
             }
-            latestRevision.update(with: linkPreviewBuilder.info, transaction: tx)
-            try linkPreviewBuilder.finalize(
-                owner: .messageLinkPreview(.init(
-                    messageRowId: latestRevisionRowId,
-                    receivedAtTimestamp: latestRevision.receivedAtTimestamp,
-                    threadRowId: threadRowId,
-                    isPastEditRevision: latestRevision.isPastEditRevision()
-                )),
-                tx: tx
-            )
         }
     }
 
@@ -270,13 +273,13 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
         priorRevisionRowId: Int64,
         threadRowId: Int64,
         newOversizeText: MessageEdits.OversizeTextSource?,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) throws {
         // The editTarget's copy of the message has no edits applied;
         // fetch _its_ attachment.
-        let oversizeTextReferencePriorToEdit = attachmentStore.fetchFirstReference(
+        let oversizeTextReferencePriorToEdit = attachmentStore.fetchAnyReference(
             owner: .messageOversizeText(messageRowId: editTarget.message.sqliteRowId!),
-            tx: tx
+            tx: tx,
         )
 
         if let oversizeTextReferencePriorToEdit {
@@ -293,7 +296,7 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
                     newOwnerMessageRowId: priorRevisionRowId,
                     newOwnerThreadRowId: threadRowId,
                     newOwnerIsPastEditRevision: true,
-                    tx: tx
+                    tx: tx,
                 )
             default:
                 throw OWSAssertionError("Invalid attachment reference type!")
@@ -304,7 +307,7 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
             try attachmentStore.removeAllOwners(
                 withId: .messageOversizeText(messageRowId: latestRevisionRowId),
                 for: oversizeTextReferencePriorToEdit.attachmentRowId,
-                tx: tx
+                tx: tx,
             )
         }
 
@@ -315,29 +318,29 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
         case .dataSource(let dataSource):
             let attachmentDataSource = dataSource
             try attachmentManager.createAttachmentStream(
-                consuming: .init(
+                from: OwnedAttachmentDataSource(
                     dataSource: attachmentDataSource,
                     owner: .messageOversizeText(.init(
                         messageRowId: latestRevisionRowId,
                         receivedAtTimestamp: latestRevision.receivedAtTimestamp,
                         threadRowId: threadRowId,
-                        isPastEditRevision: latestRevision.isPastEditRevision()
-                    ))
+                        isPastEditRevision: latestRevision.isPastEditRevision(),
+                    )),
                 ),
-                tx: tx
+                tx: tx,
             )
         case .proto(let protoPointer):
             try attachmentManager.createAttachmentPointer(
-                from: .init(
+                from: OwnedAttachmentPointerProto(
                     proto: protoPointer,
                     owner: .messageOversizeText(.init(
                         messageRowId: latestRevisionRowId,
                         receivedAtTimestamp: latestRevision.receivedAtTimestamp,
                         threadRowId: threadRowId,
-                        isPastEditRevision: latestRevision.isPastEditRevision()
-                    ))
+                        isPastEditRevision: latestRevision.isPastEditRevision(),
+                    )),
                 ),
-                tx: tx
+                tx: tx,
             )
         }
     }
@@ -349,13 +352,13 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
         priorRevision: TSMessage,
         priorRevisionRowId: Int64,
         threadRowId: Int64,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) throws {
         // The editTarget's copy of the message has no edits applied;
         // fetch _its_ attachment(s).
         let attachmentReferencesPriorToEdit = attachmentStore.fetchReferences(
-            owner: .messageBodyAttachment(messageRowId: editTarget.message.sqliteRowId!),
-            tx: tx
+            owners: [.messageBodyAttachment(messageRowId: editTarget.message.sqliteRowId!)],
+            tx: tx,
         )
 
         for attachmentReference in attachmentReferencesPriorToEdit {
@@ -368,7 +371,7 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
                     newOwnerMessageRowId: priorRevisionRowId,
                     newOwnerThreadRowId: threadRowId,
                     newOwnerIsPastEditRevision: true,
-                    tx: tx
+                    tx: tx,
                 )
             default:
                 throw OWSAssertionError("Invalid attachment reference type!")
@@ -378,7 +381,7 @@ public class EditManagerAttachmentsImpl: EditManagerAttachments {
             try attachmentStore.update(
                 attachmentReference,
                 withReceivedAtTimestamp: latestRevision.receivedAtTimestamp,
-                tx: tx
+                tx: tx,
             )
         }
     }

@@ -65,7 +65,7 @@ public final class MessageReceiver {
 
     init(
         callMessageHandler: any CallMessageHandler,
-        deleteForMeSyncMessageReceiver: any DeleteForMeSyncMessageReceiver
+        deleteForMeSyncMessageReceiver: any DeleteForMeSyncMessageReceiver,
     ) {
         self.callMessageHandler = callMessageHandler
         self.deleteForMeSyncMessageReceiver = deleteForMeSyncMessageReceiver
@@ -105,7 +105,7 @@ public final class MessageReceiver {
     /// is used to protect us from any races.
     func preprocessEnvelope(
         _ decryptedEnvelope: DecryptedIncomingEnvelope,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         // Currently, this function is only used for SKDM processing. Since this is
         // idempotent, we don't need to check for a duplicate envelope.
@@ -126,7 +126,7 @@ public final class MessageReceiver {
         serverDeliveryTimestamp: UInt64,
         shouldDiscardVisibleMessages: Bool,
         localIdentifiers: LocalIdentifiers,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         do {
             let validatedEnvelope = try ValidatedIncomingEnvelope(envelope, localIdentifiers: localIdentifiers)
@@ -148,14 +148,14 @@ public final class MessageReceiver {
                     sourceDeviceId: sourceDeviceId,
                     wasReceivedByUD: wasReceivedByUD,
                     plaintextData: plaintextData,
-                    isPlaintextCipher: nil
+                    isPlaintextCipher: nil,
                 )
                 checkForUnknownLinkedDevice(in: decryptedEnvelope, tx: tx)
                 let buildResult = MessageReceiverRequest.buildRequest(
                     for: decryptedEnvelope,
                     serverDeliveryTimestamp: serverDeliveryTimestamp,
                     shouldDiscardVisibleMessages: shouldDiscardVisibleMessages,
-                    tx: tx
+                    tx: tx,
                 )
                 switch buildResult {
                 case .discard:
@@ -165,7 +165,7 @@ public final class MessageReceiver {
                         messageReceiverRequest,
                         context: PassthroughDeliveryReceiptContext(),
                         localIdentifiers: localIdentifiers,
-                        tx: tx
+                        tx: tx,
                     )
                     fallthrough
                 case .noContent:
@@ -185,7 +185,7 @@ public final class MessageReceiver {
         _ request: MessageReceiverRequest,
         context: DeliveryReceiptContext,
         localIdentifiers: LocalIdentifiers,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         let protoContent = request.protoContent
         do {
@@ -230,7 +230,7 @@ public final class MessageReceiver {
                     serverDeliveryTimestamp: request.serverDeliveryTimestamp,
                     associatedMessageTimestamp: editMessage.targetSentTimestamp,
                     associatedMessageAuthor: request.decryptedEnvelope.sourceAci,
-                    transaction: tx
+                    transaction: tx,
                 )
             }
         case .handledElsewhere:
@@ -244,7 +244,7 @@ public final class MessageReceiver {
     func handleDeliveryReceipt(
         envelope: ServerReceiptEnvelope,
         context: DeliveryReceiptContext,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         // Server-generated delivery receipts don't include a "delivery timestamp".
         // The envelope's timestamp gives the timestamp of the message this receipt
@@ -263,7 +263,7 @@ public final class MessageReceiver {
             sentTimestamps: [envelope.validatedEnvelope.timestamp],
             deliveryTimestamp: deliveryTimestamp,
             context: context,
-            tx: tx
+            tx: tx,
         )
 
         recordEarlyReceipts(
@@ -272,7 +272,7 @@ public final class MessageReceiver {
             senderDeviceId: envelope.sourceDeviceId,
             associatedMessageTimestamps: earlyReceiptTimestamps,
             actionTimestamp: deliveryTimestamp,
-            tx: tx
+            tx: tx,
         )
     }
 
@@ -308,11 +308,11 @@ public final class MessageReceiver {
         do {
             try SpamReportingTokenRecord(
                 sourceAci: decryptedEnvelope.sourceAci,
-                spamReportingToken: spamReportingToken
+                spamReportingToken: spamReportingToken,
             ).upsert(tx.database)
         } catch {
             owsFailBeta(
-                "Couldn't save spam reporting token record. Continuing on, to avoid interrupting message processing. Error: \(error)"
+                "Couldn't save spam reporting token record. Continuing on, to avoid interrupting message processing. Error: \(error)",
             )
         }
     }
@@ -331,7 +331,7 @@ public final class MessageReceiver {
         do {
             let placeholders = try InteractionFinder.fetchInteractions(
                 timestamp: envelope.timestamp,
-                transaction: tx
+                transaction: tx,
             ).filter { ($0 as? OWSRecoverableDecryptionPlaceholder)?.sender?.serviceId == envelope.sourceAci }
             owsAssertDebug(placeholders.count <= 1)
             for placeholder in placeholders {
@@ -363,7 +363,7 @@ public final class MessageReceiver {
         request: MessageReceiverRequest,
         syncMessage: SSKProtoSyncMessage,
         localIdentifiers: LocalIdentifiers,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         let decryptedEnvelope = request.decryptedEnvelope
 
@@ -388,11 +388,13 @@ public final class MessageReceiver {
                     return
                 }
 
-                guard let transcript = OWSIncomingSentMessageTranscript.from(
-                    sentProto: sent,
-                    serverTimestamp: decryptedEnvelope.serverTimestamp,
-                    tx: tx
-                ) else {
+                guard
+                    let transcript = OWSIncomingSentMessageTranscript.from(
+                        sentProto: sent,
+                        serverTimestamp: decryptedEnvelope.serverTimestamp,
+                        tx: tx,
+                    )
+                else {
                     owsFailDebug("Couldn't parse transcript.")
                     return
                 }
@@ -414,7 +416,9 @@ public final class MessageReceiver {
                 if dataMessage.hasProfileKey {
                     if let groupId {
                         SSKEnvironment.shared.profileManagerRef.addGroupId(
-                            toProfileWhitelist: groupId.serialize(), userProfileWriter: .localUser, transaction: tx
+                            toProfileWhitelist: groupId.serialize(),
+                            userProfileWriter: .localUser,
+                            transaction: tx,
                         )
                     } else {
                         let serviceId = ServiceId.parseFrom(
@@ -428,10 +432,10 @@ public final class MessageReceiver {
                             legacyPhoneNumber: sent.destinationE164?.nilIfEmpty,
                             cache: SSKEnvironment.shared.signalServiceAddressCacheRef,
                         )
-                        if destinationAddress.isValid {
-                            SSKEnvironment.shared.profileManagerRef.addUser(
-                                toProfileWhitelist: destinationAddress, userProfileWriter: .localUser, transaction: tx
-                            )
+                        let profileManager = SSKEnvironment.shared.profileManagerRef
+                        let recipientFetcher = DependenciesBridge.shared.recipientFetcher
+                        if var recipient = recipientFetcher.fetchOrCreate(address: destinationAddress, tx: tx) {
+                            profileManager.addRecipientToProfileWhitelist(&recipient, userProfileWriter: .localUser, tx: tx)
                         }
                     }
                 }
@@ -450,7 +454,7 @@ public final class MessageReceiver {
                         expiresInSeconds: dataMessage.expireTimer,
                         expireTimerVersion: dataMessage.expireTimerVersion,
                         sentTranscript: transcript,
-                        transaction: tx
+                        transaction: tx,
                     )
                     switch result {
                     case .success, .invalidReaction:
@@ -467,7 +471,7 @@ public final class MessageReceiver {
                             serverDeliveryTimestamp: request.serverDeliveryTimestamp,
                             associatedMessageTimestamp: reaction.timestamp,
                             associatedMessageAuthor: messageAuthor,
-                            transaction: tx
+                            transaction: tx,
                         )
                     }
                 } else if let delete = dataMessage.delete {
@@ -476,7 +480,7 @@ public final class MessageReceiver {
                         sentAtTimestamp: delete.targetSentTimestamp,
                         threadUniqueId: transcript.threadForDataMessage?.uniqueId,
                         serverTimestamp: decryptedEnvelope.serverTimestamp,
-                        transaction: tx
+                        transaction: tx,
                     )
                     switch result {
                     case .success:
@@ -491,7 +495,7 @@ public final class MessageReceiver {
                             serverDeliveryTimestamp: request.serverDeliveryTimestamp,
                             associatedMessageTimestamp: delete.targetSentTimestamp,
                             associatedMessageAuthor: decryptedEnvelope.sourceAci,
-                            transaction: tx
+                            transaction: tx,
                         )
                     }
                 } else if let groupCallUpdate = dataMessage.groupCallUpdate {
@@ -502,7 +506,7 @@ public final class MessageReceiver {
                             await callMessageHandler.receivedGroupCallUpdateMessage(
                                 groupCallUpdate,
                                 forGroupId: groupId,
-                                serverReceivedTimestamp: decryptedEnvelope.timestamp
+                                serverReceivedTimestamp: decryptedEnvelope.timestamp,
                             )
                         }
                     } else {
@@ -517,7 +521,7 @@ public final class MessageReceiver {
                         let targetMessage = try DependenciesBridge.shared.pollMessageManager.processIncomingPollTerminate(
                             pollTerminateProto: pollTerminate,
                             terminateAuthor: localIdentifiers.aci,
-                            transaction: tx
+                            transaction: tx,
                         )
 
                         if let targetMessage {
@@ -539,7 +543,7 @@ public final class MessageReceiver {
                                 terminateAuthor: localIdentifiers.aci,
                                 expireTimer: dataMessage.expireTimer,
                                 expireTimerVersion: dataMessage.expireTimerVersion,
-                                tx: tx
+                                tx: tx,
                             )
                         }
                     } catch {
@@ -552,11 +556,13 @@ public final class MessageReceiver {
                         return
                     }
                     do {
-                        guard let (targetMessage, _) = try DependenciesBridge.shared.pollMessageManager.processIncomingPollVote(
-                            voteAuthor: localIdentifiers.aci,
-                            pollVoteProto: pollVote,
-                            transaction: tx
-                        ) else {
+                        guard
+                            let (targetMessage, _) = try DependenciesBridge.shared.pollMessageManager.processIncomingPollVote(
+                                voteAuthor: localIdentifiers.aci,
+                                pollVoteProto: pollVote,
+                                transaction: tx,
+                            )
+                        else {
                             Logger.error("error processing poll vote!")
                             return
                         }
@@ -572,31 +578,31 @@ public final class MessageReceiver {
                         return
                     }
                     do {
-                         let targetMessage = try DependenciesBridge.shared.pinnedMessageManager.pinMessage(
-                             pinMessageProto: pinMessage,
-                             pinAuthor: localIdentifiers.aci,
-                             thread: thread,
-                             pinSentAtTimestamp: envelope.timestamp,
-                             expireTimer: dataMessage.expireTimer,
-                             expireTimerVersion: dataMessage.expireTimerVersion,
-                             transaction: tx
-                         )
-                         SSKEnvironment.shared.databaseStorageRef.touch(interaction: targetMessage, shouldReindex: false, tx: tx)
-                     } catch {
-                         owsFailDebug("Could not pin message \(error)")
-                         return
-                     }
+                        let targetMessage = try DependenciesBridge.shared.pinnedMessageManager.pinMessage(
+                            pinMessageProto: pinMessage,
+                            pinAuthor: localIdentifiers.aci,
+                            thread: thread,
+                            pinSentAtTimestamp: envelope.timestamp,
+                            expireTimer: dataMessage.expireTimer,
+                            expireTimerVersion: dataMessage.expireTimerVersion,
+                            transaction: tx,
+                        )
+                        SSKEnvironment.shared.databaseStorageRef.touch(interaction: targetMessage, shouldReindex: false, tx: tx)
+                    } catch {
+                        owsFailDebug("Could not pin message \(error)")
+                        return
+                    }
                 } else if let unpinMessage = dataMessage.unpinMessage {
-                     do {
-                         let targetMessage = try DependenciesBridge.shared.pinnedMessageManager.unpinMessage(
-                             unpinMessageProto: unpinMessage,
-                             transaction: tx
-                         )
+                    do {
+                        let targetMessage = try DependenciesBridge.shared.pinnedMessageManager.unpinMessage(
+                            unpinMessageProto: unpinMessage,
+                            transaction: tx,
+                        )
 
-                         SSKEnvironment.shared.databaseStorageRef.touch(interaction: targetMessage, shouldReindex: false, tx: tx)
-                     } catch {
-                         owsFailDebug("Could not unpin message \(error)")
-                     }
+                        SSKEnvironment.shared.databaseStorageRef.touch(interaction: targetMessage, shouldReindex: false, tx: tx)
+                    } catch {
+                        owsFailDebug("Could not unpin message \(error)")
+                    }
                 } else {
                     guard let localIdentifiers = DependenciesBridge.shared.tsAccountManager.localIdentifiers(tx: tx) else {
                         owsFailDebug("Missing local identifiers!")
@@ -605,7 +611,7 @@ public final class MessageReceiver {
                     DependenciesBridge.shared.sentMessageTranscriptReceiver.process(
                         transcript,
                         localIdentifiers: localIdentifiers,
-                        tx: tx
+                        tx: tx,
                     )
                 }
             } else if sent.isStoryTranscript {
@@ -620,7 +626,7 @@ public final class MessageReceiver {
                     sentMessage: sent,
                     editMessage: editMessage,
                     serverDeliveryTimestamp: request.serverDeliveryTimestamp,
-                    transaction: tx
+                    transaction: tx,
                 )
                 switch result {
                 case .success, .invalidEdit:
@@ -633,7 +639,7 @@ public final class MessageReceiver {
                         serverDeliveryTimestamp: request.serverDeliveryTimestamp,
                         associatedMessageTimestamp: editMessage.targetSentTimestamp,
                         associatedMessageAuthor: decryptedEnvelope.sourceAci,
-                        transaction: tx
+                        transaction: tx,
                     )
                 }
             }
@@ -644,7 +650,9 @@ public final class MessageReceiver {
             handleSyncedBlocklist(blocked, tx: tx)
         } else if !syncMessage.read.isEmpty {
             let earlyReceipts = SSKEnvironment.shared.receiptManagerRef.processReadReceiptsFromLinkedDevice(
-                syncMessage.read, readTimestamp: decryptedEnvelope.timestamp, tx: tx
+                syncMessage.read,
+                readTimestamp: decryptedEnvelope.timestamp,
+                tx: tx,
             )
             for readReceiptProto in earlyReceipts {
                 let messageAuthor = Aci.parseFrom(
@@ -655,12 +663,14 @@ public final class MessageReceiver {
                     timestamp: decryptedEnvelope.timestamp,
                     associatedMessageTimestamp: readReceiptProto.timestamp,
                     associatedMessageAuthor: messageAuthor.map { AciObjC($0) },
-                    transaction: tx
+                    transaction: tx,
                 )
             }
         } else if !syncMessage.viewed.isEmpty {
             let earlyReceipts = SSKEnvironment.shared.receiptManagerRef.processViewedReceiptsFromLinkedDevice(
-                syncMessage.viewed, viewedTimestamp: decryptedEnvelope.timestamp, tx: tx
+                syncMessage.viewed,
+                viewedTimestamp: decryptedEnvelope.timestamp,
+                tx: tx,
             )
             for viewedReceiptProto in earlyReceipts {
                 let messageAuthor = Aci.parseFrom(
@@ -671,7 +681,7 @@ public final class MessageReceiver {
                     timestamp: decryptedEnvelope.timestamp,
                     associatedMessageTimestamp: viewedReceiptProto.timestamp,
                     associatedMessageAuthor: messageAuthor.map { AciObjC($0) },
-                    transaction: tx
+                    transaction: tx,
                 )
             }
         } else if let verified = syncMessage.verified {
@@ -701,7 +711,7 @@ public final class MessageReceiver {
                     serverDeliveryTimestamp: request.serverDeliveryTimestamp,
                     associatedMessageTimestamp: associatedMessageTimestamp,
                     associatedMessageAuthor: senderAci,
-                    transaction: tx
+                    transaction: tx,
                 )
             }
         } else if let configuration = syncMessage.configuration {
@@ -717,7 +727,9 @@ public final class MessageReceiver {
         } else if let outgoingPayment = syncMessage.outgoingPayment {
             // An "incoming" sync message notifies us of an "outgoing" payment.
             SSKEnvironment.shared.paymentsHelperRef.processIncomingPaymentSyncMessage(
-                outgoingPayment, messageTimestamp: request.serverDeliveryTimestamp, transaction: tx
+                outgoingPayment,
+                messageTimestamp: request.serverDeliveryTimestamp,
+                transaction: tx,
             )
         } else if let pniChangeNumber = syncMessage.pniChangeNumber {
             let pniProcessor = DependenciesBridge.shared.incomingPniChangeNumberProcessor
@@ -741,7 +753,7 @@ public final class MessageReceiver {
             pniProcessor.processIncomingPniChangePhoneNumber(
                 proto: pniChangeNumber,
                 updatedPni: updatedPni,
-                tx: tx
+                tx: tx,
             )
         } else if let callEvent = syncMessage.callEvent {
             let incomingCallEvent: IncomingCallEventSyncMessageParams
@@ -756,7 +768,7 @@ public final class MessageReceiver {
                 .createOrUpdateRecordForIncomingSyncMessage(
                     incomingSyncMessage: incomingCallEvent,
                     syncMessageTimestamp: decryptedEnvelope.timestamp,
-                    tx: tx
+                    tx: tx,
                 )
         } else if let callLinkUpdate = syncMessage.callLinkUpdate {
             switch callLinkUpdate.type {
@@ -777,12 +789,12 @@ public final class MessageReceiver {
             DependenciesBridge.shared.incomingCallLogEventSyncMessageManager
                 .handleIncomingSyncMessage(
                     incomingSyncMessage: incomingCallLogEvent,
-                    tx: tx
+                    tx: tx,
                 )
         } else if let deleteForMe = syncMessage.deleteForMe {
             deleteForMeSyncMessageReceiver.handleDeleteForMeProto(
                 deleteForMeProto: deleteForMe,
-                tx: tx
+                tx: tx,
             )
         } else if syncMessage.deviceNameChange != nil {
             Task {
@@ -873,7 +885,7 @@ public final class MessageReceiver {
             blockedPhoneNumbers: Set(blocked.numbers),
             blockedAcis: blockedAcis,
             blockedGroupIds: Set(blocked.groupIds),
-            tx: tx
+            tx: tx,
         )
     }
 
@@ -894,7 +906,7 @@ public final class MessageReceiver {
         request: MessageReceiverRequest,
         dataMessage: SSKProtoDataMessage,
         localIdentifiers: LocalIdentifiers,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         guard SDS.fitsInInt64(dataMessage.timestamp) else {
             Logger.warn("Ignoring dataMessage with too-large timestamp.")
@@ -947,7 +959,7 @@ public final class MessageReceiver {
         _ profileKey: Data,
         for aci: Aci,
         localIdentifiers: LocalIdentifiers,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         let tsAccountManager = DependenciesBridge.shared.tsAccountManager
         if aci == localIdentifiers.aci, tsAccountManager.registrationState(tx: tx).isPrimaryDevice != false {
@@ -961,7 +973,7 @@ public final class MessageReceiver {
             userProfileWriter: .localUser,
             localIdentifiers: localIdentifiers,
             authedAccount: .implicit(),
-            tx: tx
+            tx: tx,
         )
     }
 
@@ -973,7 +985,7 @@ public final class MessageReceiver {
     private func preprocessDataMessage(
         _ dataMessage: SSKProtoDataMessage,
         envelope: DecryptedIncomingEnvelope,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) -> TSThread? {
         guard let groupContext = dataMessage.groupV2 else {
             let contactAddress = SignalServiceAddress(envelope.sourceAci)
@@ -1020,7 +1032,7 @@ public final class MessageReceiver {
         _ dataMessage: SSKProtoDataMessage,
         request: MessageReceiverRequest,
         thread: TSThread,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) -> TSIncomingMessage? {
         let envelope = request.decryptedEnvelope
 
@@ -1030,7 +1042,7 @@ public final class MessageReceiver {
                 thread: thread,
                 timestamp: MessageTimestampGenerator.sharedInstance.generateTimestamp(),
                 sender: SignalServiceAddress(envelope.sourceAci),
-                protocolVersion: UInt(dataMessage.requiredProtocolVersion)
+                protocolVersion: UInt(dataMessage.requiredProtocolVersion),
             ).anyInsert(transaction: tx)
             return nil
         }
@@ -1053,7 +1065,7 @@ public final class MessageReceiver {
                 expiresInSeconds: dataMessage.expireTimer,
                 expireTimerVersion: dataMessage.expireTimerVersion,
                 sentTranscript: nil,
-                transaction: tx
+                transaction: tx,
             )
             switch result {
             case .success, .invalidReaction:
@@ -1069,7 +1081,7 @@ public final class MessageReceiver {
                         serviceIdBinary: reaction.targetAuthorAciBinary,
                         serviceIdString: reaction.targetAuthorAci,
                     ),
-                    transaction: tx
+                    transaction: tx,
                 )
             }
             return nil
@@ -1081,7 +1093,7 @@ public final class MessageReceiver {
                 sentAtTimestamp: delete.targetSentTimestamp,
                 threadUniqueId: thread.uniqueId,
                 serverTimestamp: envelope.serverTimestamp,
-                transaction: tx
+                transaction: tx,
             )
             switch result {
             case .success:
@@ -1096,7 +1108,7 @@ public final class MessageReceiver {
                     serverDeliveryTimestamp: request.serverDeliveryTimestamp,
                     associatedMessageTimestamp: delete.targetSentTimestamp,
                     associatedMessageAuthor: envelope.sourceAci,
-                    transaction: tx
+                    transaction: tx,
                 )
             }
             return nil
@@ -1104,11 +1116,13 @@ public final class MessageReceiver {
 
         if let pollVote = dataMessage.pollVote {
             do {
-                guard let (targetMessage, shouldNotifyAuthorOfVote) = try DependenciesBridge.shared.pollMessageManager.processIncomingPollVote(
-                    voteAuthor: envelope.sourceAci,
-                    pollVoteProto: pollVote,
-                    transaction: tx
-                ) else {
+                guard
+                    let (targetMessage, shouldNotifyAuthorOfVote) = try DependenciesBridge.shared.pollMessageManager.processIncomingPollVote(
+                        voteAuthor: envelope.sourceAci,
+                        pollVoteProto: pollVote,
+                        transaction: tx,
+                    )
+                else {
                     Logger.error("error processing poll vote!")
                     return nil
                 }
@@ -1119,12 +1133,12 @@ public final class MessageReceiver {
                 if shouldNotifyAuthorOfVote {
                     // If this is not an unvote, the user is the poll creator and the vote isn't authored by them, send a notification.
                     if let outgoingMessage = targetMessage as? TSOutgoingMessage {
-                            SSKEnvironment.shared.notificationPresenterRef.notifyUserOfPollVote(
-                                forMessage: outgoingMessage,
-                                voteAuthor: envelope.sourceAci,
-                                thread: thread,
-                                transaction: tx
-                            )
+                        SSKEnvironment.shared.notificationPresenterRef.notifyUserOfPollVote(
+                            forMessage: outgoingMessage,
+                            voteAuthor: envelope.sourceAci,
+                            thread: thread,
+                            transaction: tx,
+                        )
                     }
                 }
             } catch {
@@ -1155,7 +1169,7 @@ public final class MessageReceiver {
                 await callMessageHandler.receivedGroupCallUpdateMessage(
                     groupCallUpdate,
                     forGroupId: groupId,
-                    serverReceivedTimestamp: envelope.timestamp
+                    serverReceivedTimestamp: envelope.timestamp,
                 )
             }
             return nil
@@ -1175,69 +1189,70 @@ public final class MessageReceiver {
             // just returns the validated body object needed for downstream APIs.
             DependenciesBridge.shared.attachmentContentValidator.truncatedMessageBodyForInlining(
                 MessageBody(text: $0, ranges: bodyRanges),
-                tx: tx
+                tx: tx,
             )
         }
+
         let serverGuid = ValidatedIncomingEnvelope.parseServerGuid(fromEnvelope: envelope.envelope)
-        let quotedMessageBuilder = DependenciesBridge.shared.quotedReplyManager.quotedMessage(
-            for: dataMessage,
-            thread: thread,
-            tx: tx
-        )
-        let contactBuilder: OwnedAttachmentBuilder<OWSContact>?
+
+        let validatedQuotedReply: ValidatedQuotedReply?
+        if let quoteProto = dataMessage.quote {
+            do {
+                let quotedReplyManager = DependenciesBridge.shared.quotedReplyManager
+                validatedQuotedReply = try quotedReplyManager.validateAndBuildQuotedReply(
+                    from: quoteProto,
+                    threadUniqueId: thread.uniqueId,
+                    tx: tx,
+                )
+            } catch {
+                Logger.warn("Failed to build validated quote reply! \(error)")
+                validatedQuotedReply = nil
+            }
+        } else {
+            validatedQuotedReply = nil
+        }
+
+        let validatedContactShare: ValidatedContactShareProto?
         if let contactProto = dataMessage.contact.first {
-            do {
-                contactBuilder = try DependenciesBridge.shared.contactShareManager.validateAndBuild(
-                    for: contactProto,
-                    tx: tx
-                )
-            } catch {
-                Logger.error("contact share error: \(error)")
-                return nil
-            }
+            let contactShareManager = DependenciesBridge.shared.contactShareManager
+            validatedContactShare = contactShareManager.validateAndBuild(for: contactProto)
         } else {
-            contactBuilder = nil
+            validatedContactShare = nil
         }
 
-        let linkPreviewBuilder: OwnedAttachmentBuilder<OWSLinkPreview>?
-        if let linkPreview = dataMessage.preview.first {
+        let validatedLinkPreview: ValidatedLinkPreviewProto?
+        if let linkPreviewProto = dataMessage.preview.first {
             do {
-                linkPreviewBuilder = try DependenciesBridge.shared.linkPreviewManager.validateAndBuildLinkPreview(
-                    from: linkPreview,
+                let linkPreviewManager = DependenciesBridge.shared.linkPreviewManager
+                validatedLinkPreview = try linkPreviewManager.validateAndBuildLinkPreview(
+                    from: linkPreviewProto,
                     dataMessage: dataMessage,
-                    tx: tx
                 )
-            } catch let error as LinkPreviewError {
-                switch error {
-                case .invalidPreview:
-                    // Just drop the link preview, but keep the message
-                    Logger.info("Dropping invalid link preview; keeping message")
-                    linkPreviewBuilder = nil
-                case .noPreview, .fetchFailure, .featureDisabled:
-                    owsFailDebug("Invalid link preview error on incoming proto")
-                    linkPreviewBuilder = nil
-                }
+            } catch LinkPreviewError.invalidPreview {
+                // Just drop the link preview, but keep the message
+                Logger.warn("Dropping invalid link preview; keeping message")
+                validatedLinkPreview = nil
             } catch {
-                Logger.error("linkPreviewError: \(error)")
+                Logger.warn("Unexpected error for incoming link preview proto! \(error)")
                 return nil
             }
         } else {
-            linkPreviewBuilder = nil
+            validatedLinkPreview = nil
         }
 
-        var messageStickerBuilder: OwnedAttachmentBuilder<MessageSticker>?
+        let validatedMessageSticker: ValidatedMessageStickerProto?
         if let stickerProto = dataMessage.sticker {
             do {
-                messageStickerBuilder = try DependenciesBridge.shared.messageStickerManager.buildValidatedMessageSticker(
+                let messageStickerManager = DependenciesBridge.shared.messageStickerManager
+                validatedMessageSticker = try messageStickerManager.buildValidatedMessageSticker(
                     from: stickerProto,
-                    tx: tx
                 )
             } catch {
-                Logger.error("stickerError: \(error)")
+                Logger.warn("Failed to build validated sticker for incoming sticker proto! \(error)")
                 return nil
             }
         } else {
-            messageStickerBuilder = nil
+            validatedMessageSticker = nil
         }
 
         let giftBadge = OWSGiftBadge.maybeBuild(from: dataMessage)
@@ -1249,7 +1264,7 @@ public final class MessageReceiver {
                 thread: thread,
                 paymentNotification: paymentModels.notification,
                 senderAci: envelope.sourceAci,
-                transaction: tx
+                transaction: tx,
             )
         } else if let payment = dataMessage.payment, let activation = payment.activation {
             switch activation.type {
@@ -1265,7 +1280,7 @@ public final class MessageReceiver {
 
         var storyTimestamp: UInt64?
         var storyAuthorAci: Aci?
-        if let storyContext = dataMessage.storyContext, storyContext.hasSentTimestamp, (storyContext.hasAuthorAci || storyContext.hasAuthorAciBinary) {
+        if let storyContext = dataMessage.storyContext, storyContext.hasSentTimestamp, storyContext.hasAuthorAci || storyContext.hasAuthorAciBinary {
             storyTimestamp = storyContext.sentTimestamp
             storyAuthorAci = Aci.parseFrom(serviceIdBinary: storyContext.authorAciBinary, serviceIdString: storyContext.authorAci)
             Logger.info("Processing storyContext for message w/ts \(envelope.timestamp), storyTimestamp: \(String(describing: storyTimestamp)), authorAci: \(String(describing: storyAuthorAci))")
@@ -1276,11 +1291,13 @@ public final class MessageReceiver {
 
             if thread.isGroupThread {
                 // Drop group story replies if we can't find the story message
-                guard StoryFinder.story(
-                    timestamp: storyContext.sentTimestamp,
-                    author: storyAuthorAci,
-                    transaction: tx
-                ) != nil else {
+                guard
+                    StoryFinder.story(
+                        timestamp: storyContext.sentTimestamp,
+                        author: storyAuthorAci,
+                        transaction: tx,
+                    ) != nil
+                else {
                     Logger.warn("Couldn't find story message; discarding group story reply")
                     return nil
                 }
@@ -1294,19 +1311,25 @@ public final class MessageReceiver {
             }
         }
 
-        let pollCreate = dataMessage.pollCreate
-        if let pollCreate {
+        let validatedPollCreate: ValidatedIncomingPollCreate?
+        if let pollCreateProto = dataMessage.pollCreate {
             do {
-                body = try DependenciesBridge.shared.pollMessageManager.validateIncomingPollCreate(
-                    pollCreate: pollCreate,
-                    tx: tx)
+                let pollMessageManager = DependenciesBridge.shared.pollMessageManager
+                validatedPollCreate = try pollMessageManager.validateIncomingPollCreate(
+                    pollCreateProto: pollCreateProto,
+                    tx: tx,
+                )
+
+                body = validatedPollCreate!.messageBody
             } catch {
                 Logger.error("Error validating incoming poll create: \(error)")
                 return nil
             }
+        } else {
+            validatedPollCreate = nil
         }
 
-        if let pollTerminate = dataMessage.pollTerminate{
+        if let pollTerminate = dataMessage.pollTerminate {
             guard let groupThread = thread as? TSGroupThread else {
                 Logger.error("Poll terminate sent to thread that is not a group thread")
                 return nil
@@ -1316,7 +1339,7 @@ public final class MessageReceiver {
                 let targetMessage = try DependenciesBridge.shared.pollMessageManager.processIncomingPollTerminate(
                     pollTerminateProto: pollTerminate,
                     terminateAuthor: envelope.sourceAci,
-                    transaction: tx
+                    transaction: tx,
                 )
 
                 if let targetMessage {
@@ -1335,7 +1358,7 @@ public final class MessageReceiver {
                             terminateAuthor: envelope.sourceAci,
                             expireTimer: dataMessage.expireTimer,
                             expireTimerVersion: dataMessage.expireTimerVersion,
-                            tx: tx
+                            tx: tx,
                         )
                     } else {
                         Logger.error("Poll question empty when processing poll terminate")
@@ -1348,7 +1371,7 @@ public final class MessageReceiver {
                         serverDeliveryTimestamp: request.serverDeliveryTimestamp,
                         associatedMessageTimestamp: pollTerminate.targetSentTimestamp,
                         associatedMessageAuthor: request.decryptedEnvelope.sourceAci,
-                        transaction: tx
+                        transaction: tx,
                     )
                 }
             } catch {
@@ -1360,10 +1383,11 @@ public final class MessageReceiver {
             return nil
         }
 
-        if BuildFlags.PinnedMessages.receive,
-           thread.canUserEditPinnedMessages(aci: envelope.sourceAci) {
-            if let pinMessage = dataMessage.pinMessage
-            {
+        if
+            BuildFlags.PinnedMessages.receive,
+            thread.canUserEditPinnedMessages(aci: envelope.sourceAci)
+        {
+            if let pinMessage = dataMessage.pinMessage {
                 do {
                     let targetMessage = try DependenciesBridge.shared.pinnedMessageManager.pinMessage(
                         pinMessageProto: pinMessage,
@@ -1372,7 +1396,7 @@ public final class MessageReceiver {
                         pinSentAtTimestamp: envelope.timestamp,
                         expireTimer: dataMessage.expireTimer,
                         expireTimerVersion: dataMessage.expireTimerVersion,
-                        transaction: tx
+                        transaction: tx,
                     )
 
                     SSKEnvironment.shared.databaseStorageRef.touch(interaction: targetMessage, shouldReindex: false, tx: tx)
@@ -1388,7 +1412,7 @@ public final class MessageReceiver {
                 do {
                     let targetMessage = try DependenciesBridge.shared.pinnedMessageManager.unpinMessage(
                         unpinMessageProto: unpinMessage,
-                        transaction: tx
+                        transaction: tx,
                     )
 
                     SSKEnvironment.shared.databaseStorageRef.touch(interaction: targetMessage, shouldReindex: false, tx: tx)
@@ -1426,13 +1450,13 @@ public final class MessageReceiver {
             storyAuthorAci: storyAuthorAci,
             storyTimestamp: storyTimestamp,
             storyReactionEmoji: nil,
-            quotedMessage: quotedMessageBuilder?.info,
-            contactShare: contactBuilder?.info,
-            linkPreview: linkPreviewBuilder?.info,
-            messageSticker: messageStickerBuilder?.info,
+            quotedMessage: validatedQuotedReply?.quotedReply,
+            contactShare: validatedContactShare?.contact,
+            linkPreview: validatedLinkPreview?.preview,
+            messageSticker: validatedMessageSticker?.sticker,
             giftBadge: giftBadge,
             paymentNotification: paymentModels?.notification,
-            isPoll: pollCreate != nil
+            isPoll: validatedPollCreate != nil,
         )
         let message = messageBuilder.build()
 
@@ -1443,12 +1467,12 @@ public final class MessageReceiver {
 
         let hasRenderableContent = messageBuilder.hasRenderableContent(
             hasBodyAttachments: !dataMessage.attachments.isEmpty,
-            hasLinkPreview: linkPreviewBuilder != nil,
-            hasQuotedReply: quotedMessageBuilder != nil,
-            hasContactShare: contactBuilder != nil,
-            hasSticker: messageStickerBuilder != nil,
+            hasLinkPreview: validatedLinkPreview != nil,
+            hasQuotedReply: validatedQuotedReply != nil,
+            hasContactShare: validatedContactShare != nil,
+            hasSticker: validatedMessageSticker != nil,
             hasPayment: paymentModels != nil,
-            hasPoll: pollCreate != nil
+            hasPoll: validatedPollCreate != nil,
         )
         guard hasRenderableContent else {
             Logger.warn("Ignoring empty: \(messageDescription)")
@@ -1470,62 +1494,87 @@ public final class MessageReceiver {
         let updatedThread = TSThread.anyFetch(uniqueId: thread.uniqueId, transaction: tx) ?? thread
 
         do {
-            try DependenciesBridge.shared.attachmentManager.createAttachmentPointers(
-                from: dataMessage.attachments.map { proto in
-                    return .init(
+            let attachmentManager = DependenciesBridge.shared.attachmentManager
+
+            for (idx, proto) in dataMessage.attachments.enumerated() {
+                try attachmentManager.createAttachmentPointer(
+                    from: OwnedAttachmentPointerProto(
                         proto: proto,
                         owner: .messageBodyAttachment(.init(
                             messageRowId: message.sqliteRowId!,
                             receivedAtTimestamp: message.receivedAtTimestamp,
                             threadRowId: thread.sqliteRowId!,
                             isViewOnce: message.isViewOnceMessage,
-                            isPastEditRevision: message.isPastEditRevision()
-                        ))
-                    )
-                },
-                tx: tx
-            )
+                            isPastEditRevision: message.isPastEditRevision(),
+                            orderInMessage: UInt32(idx),
+                        )),
+                    ),
+                    tx: tx,
+                )
+            }
 
-            try quotedMessageBuilder?.finalize(
-                owner: .quotedReplyAttachment(.init(
-                    messageRowId: message.sqliteRowId!,
-                    receivedAtTimestamp: message.receivedAtTimestamp,
-                    threadRowId: thread.sqliteRowId!,
-                    isPastEditRevision: message.isPastEditRevision()
-                )),
-                tx: tx
-            )
-            try linkPreviewBuilder?.finalize(
-                owner: .messageLinkPreview(.init(
-                    messageRowId: message.sqliteRowId!,
-                    receivedAtTimestamp: message.receivedAtTimestamp,
-                    threadRowId: thread.sqliteRowId!,
-                    isPastEditRevision: message.isPastEditRevision()
-                )),
-                tx: tx
-            )
-            try messageStickerBuilder.map {
-                try $0.finalize(
-                    owner: .messageSticker(.init(
+            if
+                let quotedReplyAttachmentDataSource = validatedQuotedReply?.thumbnailDataSource,
+                MimeTypeUtil.isSupportedVisualMediaMimeType(quotedReplyAttachmentDataSource.originalAttachmentMimeType)
+            {
+                try attachmentManager.createQuotedReplyMessageThumbnail(
+                    from: quotedReplyAttachmentDataSource,
+                    owningMessageAttachmentBuilder: .init(
                         messageRowId: message.sqliteRowId!,
                         receivedAtTimestamp: message.receivedAtTimestamp,
                         threadRowId: thread.sqliteRowId!,
                         isPastEditRevision: message.isPastEditRevision(),
-                        stickerPackId: $0.info.packId,
-                        stickerId: $0.info.stickerId
-                    )),
-                    tx: tx
+                    ),
+                    tx: tx,
                 )
             }
-            try contactBuilder?.finalize(
-                owner: .messageContactAvatar(.init(
-                    messageRowId: message.sqliteRowId!,
-                    receivedAtTimestamp: message.receivedAtTimestamp,
-                    threadRowId: thread.sqliteRowId!,
-                    isPastEditRevision: message.isPastEditRevision()
-                )),
-                tx: tx
-            )
+
+            if let linkPreviewImageProto = validatedLinkPreview?.imageProto {
+                try attachmentManager.createAttachmentPointer(
+                    from: OwnedAttachmentPointerProto(
+                        proto: linkPreviewImageProto,
+                        owner: .messageLinkPreview(.init(
+                            messageRowId: message.sqliteRowId!,
+                            receivedAtTimestamp: message.receivedAtTimestamp,
+                            threadRowId: thread.sqliteRowId!,
+                            isPastEditRevision: message.isPastEditRevision(),
+                        )),
+                    ),
+                    tx: tx,
+                )
+            }
+
+            if let validatedMessageSticker {
+                try attachmentManager.createAttachmentPointer(
+                    from: OwnedAttachmentPointerProto(
+                        proto: validatedMessageSticker.proto,
+                        owner: .messageSticker(.init(
+                            messageRowId: message.sqliteRowId!,
+                            receivedAtTimestamp: message.receivedAtTimestamp,
+                            threadRowId: thread.sqliteRowId!,
+                            isPastEditRevision: message.isPastEditRevision(),
+                            stickerPackId: validatedMessageSticker.sticker.packId,
+                            stickerId: validatedMessageSticker.sticker.stickerId,
+                        )),
+                    ),
+                    tx: tx,
+                )
+            }
+
+            if let contactAvatarProto = validatedContactShare?.avatarProto {
+                try attachmentManager.createAttachmentPointer(
+                    from: OwnedAttachmentPointerProto(
+                        proto: contactAvatarProto,
+                        owner: .messageContactAvatar(.init(
+                            messageRowId: message.sqliteRowId!,
+                            receivedAtTimestamp: message.receivedAtTimestamp,
+                            threadRowId: thread.sqliteRowId!,
+                            isPastEditRevision: message.isPastEditRevision(),
+                        )),
+                    ),
+                    tx: tx,
+                )
+            }
         } catch {
             owsFailDebug("Could not build attachments!")
             DependenciesBridge.shared.interactionDeleteManager
@@ -1533,13 +1582,13 @@ public final class MessageReceiver {
             return nil
         }
 
-        if let pollCreate = dataMessage.pollCreate,
-           let interactionId = message.grdbId?.int64Value {
+        if let validatedPollCreate {
             do {
-                try DependenciesBridge.shared.pollMessageManager.processIncomingPollCreate(
-                    interactionId: interactionId,
-                    pollCreateProto: pollCreate,
-                    transaction: tx
+                let pollMessageManager = DependenciesBridge.shared.pollMessageManager
+                try pollMessageManager.processIncomingPollCreate(
+                    interactionId: message.sqliteRowId!,
+                    pollCreateProto: validatedPollCreate.pollCreateProto,
+                    transaction: tx,
                 )
             } catch {
                 owsFailDebug("Could not insert poll!")
@@ -1570,7 +1619,7 @@ public final class MessageReceiver {
                 thread: updatedThread,
                 circumstance: hasPendingMessageRequest ? .onLinkedDeviceWhilePendingMessageRequest : .onLinkedDevice,
                 shouldClearNotifications: false, // not required, since no notifications if sent by local
-                transaction: tx
+                transaction: tx,
             )
         }
 
@@ -1582,7 +1631,7 @@ public final class MessageReceiver {
                 SSKEnvironment.shared.typingIndicatorsRef.didReceiveIncomingMessage(
                     inThread: updatedThread,
                     senderAci: envelope.sourceAci,
-                    deviceId: envelope.sourceDeviceId
+                    deviceId: envelope.sourceDeviceId,
                 )
             }
         }
@@ -1594,7 +1643,7 @@ public final class MessageReceiver {
         envelope: DecryptedIncomingEnvelope,
         dataMessage: SSKProtoDataMessage,
         thread: TSThread,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         guard let contactThread = thread as? TSContactThread else {
             return
@@ -1608,11 +1657,11 @@ public final class MessageReceiver {
             contactThread: contactThread,
             disappearingMessageToken: .token(
                 forProtoExpireTimerSeconds: dataMessage.expireTimer,
-                version: dataMessage.expireTimerVersion
+                version: dataMessage.expireTimerVersion,
             ),
             changeAuthor: envelope.sourceAci,
             localIdentifiers: localIdentifiers,
-            transaction: tx
+            transaction: tx,
         )
     }
 
@@ -1620,7 +1669,7 @@ public final class MessageReceiver {
         request: MessageReceiverRequest,
         callMessage: SSKProtoCallMessage,
         localIdentifiers: LocalIdentifiers,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         let envelope = request.decryptedEnvelope
 
@@ -1666,14 +1715,14 @@ public final class MessageReceiver {
             sentAtTimestamp: envelope.timestamp,
             serverReceivedTimestamp: envelope.serverTimestamp,
             serverDeliveryTimestamp: request.serverDeliveryTimestamp,
-            tx: tx
+            tx: tx,
         )
     }
 
     private func handleIncomingEnvelope(
         _ decryptedEnvelope: DecryptedIncomingEnvelope,
         withSenderKeyDistributionMessage skdmData: Data,
-        transaction tx: DBWriteTransaction
+        transaction tx: DBWriteTransaction,
     ) {
         do {
             let skdm = try SenderKeyDistributionMessage(bytes: skdmData)
@@ -1692,7 +1741,7 @@ public final class MessageReceiver {
     private func handleIncomingEnvelope(
         request: MessageReceiverRequest,
         typingMessage: SSKProtoTypingMessage,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         let envelope = request.decryptedEnvelope
 
@@ -1742,13 +1791,13 @@ public final class MessageReceiver {
                 SSKEnvironment.shared.typingIndicatorsRef.didReceiveTypingStartedMessage(
                     inThread: thread,
                     senderAci: envelope.sourceAci,
-                    deviceId: envelope.sourceDeviceId
+                    deviceId: envelope.sourceDeviceId,
                 )
             case .stopped:
                 SSKEnvironment.shared.typingIndicatorsRef.didReceiveTypingStoppedMessage(
                     inThread: thread,
                     senderAci: envelope.sourceAci,
-                    deviceId: envelope.sourceDeviceId
+                    deviceId: envelope.sourceDeviceId,
                 )
             case .none:
                 owsFailDebug("typingMessage has unexpected action")
@@ -1761,7 +1810,7 @@ public final class MessageReceiver {
         request: MessageReceiverRequest,
         receiptMessage: SSKProtoReceiptMessage,
         context: DeliveryReceiptContext,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         let envelope = request.decryptedEnvelope
 
@@ -1787,7 +1836,7 @@ public final class MessageReceiver {
                 sentTimestamps: sentTimestamps,
                 deliveryTimestamp: envelope.timestamp,
                 context: context,
-                tx: tx
+                tx: tx,
             )
         case .read:
             earlyTimestamps = SSKEnvironment.shared.receiptManagerRef.processReadReceipts(
@@ -1795,7 +1844,7 @@ public final class MessageReceiver {
                 recipientDeviceId: envelope.sourceDeviceId,
                 sentTimestamps: sentTimestamps,
                 readTimestamp: envelope.timestamp,
-                tx: tx
+                tx: tx,
             )
         case .viewed:
             earlyTimestamps = SSKEnvironment.shared.receiptManagerRef.processViewedReceipts(
@@ -1803,7 +1852,7 @@ public final class MessageReceiver {
                 recipientDeviceId: envelope.sourceDeviceId,
                 sentTimestamps: sentTimestamps,
                 viewedTimestamp: envelope.timestamp,
-                tx: tx
+                tx: tx,
             )
         }
 
@@ -1813,7 +1862,7 @@ public final class MessageReceiver {
             senderDeviceId: envelope.sourceDeviceId,
             associatedMessageTimestamps: earlyTimestamps,
             actionTimestamp: envelope.timestamp,
-            tx: tx
+            tx: tx,
         )
     }
 
@@ -1831,7 +1880,7 @@ public final class MessageReceiver {
         senderDeviceId: DeviceId,
         associatedMessageTimestamps: [UInt64],
         actionTimestamp: UInt64,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         for associatedMessageTimestamp in associatedMessageTimestamps {
             SSKEnvironment.shared.earlyMessageManagerRef.recordEarlyReceiptForOutgoingMessage(
@@ -1840,7 +1889,7 @@ public final class MessageReceiver {
                 senderDeviceId: senderDeviceId,
                 timestamp: actionTimestamp,
                 associatedMessageTimestamp: associatedMessageTimestamp,
-                tx: tx
+                tx: tx,
             )
         }
     }
@@ -1848,7 +1897,7 @@ public final class MessageReceiver {
     private func handleIncomingEnvelope(
         request: MessageReceiverRequest,
         decryptionErrorMessage: Data,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         let envelope = request.decryptedEnvelope
         let sourceAci = envelope.sourceAci
@@ -1875,15 +1924,13 @@ public final class MessageReceiver {
                 let sessionRecord = try sessionStore.loadSession(for: protocolAddress, context: tx)
                 if try sessionRecord?.currentRatchetKeyMatches(ratchetKey) == true {
                     Logger.info("Decryption error included ratchet key. Archiving...")
-                    sessionStore.archiveSession(for: sourceAci, deviceId: sourceDeviceId, tx: tx)
+                    sessionStore.archiveSession(forServiceId: sourceAci, deviceId: sourceDeviceId, tx: tx)
                     didPerformSessionReset = true
                 } else {
                     didPerformSessionReset = false
                 }
             } else {
                 // If we don't have a ratchet key, this was a sender key session message.
-                // Let's log any info about SKDMs that we had sent to the address requesting resend
-                SSKEnvironment.shared.senderKeyStoreRef.logSKDMInfo(for: SignalServiceAddress(sourceAci), transaction: tx)
                 didPerformSessionReset = false
             }
 
@@ -1893,13 +1940,13 @@ public final class MessageReceiver {
                 deviceId: sourceDeviceId,
                 failedTimestamp: errorMessage.timestamp,
                 didResetSession: didPerformSessionReset,
-                tx: tx
+                tx: tx,
             )
 
             let sendBlock = { (transaction: DBWriteTransaction) in
-                if let resendResponse = resendResponse {
+                if let resendResponse {
                     let preparedMessage = PreparedOutgoingMessage.preprepared(
-                        transientMessageWithoutAttachments: resendResponse
+                        transientMessageWithoutAttachments: resendResponse,
                     )
                     SSKEnvironment.shared.messageSenderJobQueueRef.add(message: preparedMessage, transaction: transaction)
                 }
@@ -1924,7 +1971,7 @@ public final class MessageReceiver {
         request: MessageReceiverRequest,
         storyMessage: SSKProtoStoryMessage,
         localIdentifiers: LocalIdentifiers,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         do {
             try StoryManager.processIncomingStoryMessage(
@@ -1932,7 +1979,7 @@ public final class MessageReceiver {
                 timestamp: request.decryptedEnvelope.timestamp,
                 author: request.decryptedEnvelope.sourceAci,
                 localIdentifiers: localIdentifiers,
-                transaction: tx
+                transaction: tx,
             )
         } catch {
             Logger.warn("Failed to insert story message with error \(error.localizedDescription)")
@@ -1950,7 +1997,7 @@ public final class MessageReceiver {
         sentMessage: SSKProtoSyncMessageSent,
         editMessage: SSKProtoEditMessage,
         serverDeliveryTimestamp: UInt64,
-        transaction tx: DBWriteTransaction
+        transaction tx: DBWriteTransaction,
     ) -> EditProcessingResult {
 
         guard SDS.fitsInInt64(editMessage.targetSentTimestamp) else {
@@ -1958,11 +2005,13 @@ public final class MessageReceiver {
             return .invalidEdit
         }
 
-        guard let transcript = OWSIncomingSentMessageTranscript.from(
-            sentProto: sentMessage,
-            serverTimestamp: decryptedEnvelope.serverTimestamp,
-            tx: tx
-        ) else {
+        guard
+            let transcript = OWSIncomingSentMessageTranscript.from(
+                sentProto: sentMessage,
+                serverTimestamp: decryptedEnvelope.serverTimestamp,
+                tx: tx,
+            )
+        else {
             Logger.warn("Missing edit transcript.")
             return .invalidEdit
         }
@@ -1978,21 +2027,23 @@ public final class MessageReceiver {
             let targetMessage = DependenciesBridge.shared.editMessageStore.editTarget(
                 timestamp: editMessage.targetSentTimestamp,
                 authorAci: nil,
-                tx: tx
+                tx: tx,
             )
         else {
             Logger.warn("Edit cannot find the target message")
             return .editedMessageMissing
         }
 
-        guard let message = try? handleMessageEdit(
-            envelope: decryptedEnvelope,
-            serverDeliveryTimestamp: serverDeliveryTimestamp,
-            thread: thread,
-            editTarget: targetMessage,
-            editMessage: editMessage,
-            transaction: tx
-        ) else {
+        guard
+            let message = try? handleMessageEdit(
+                envelope: decryptedEnvelope,
+                serverDeliveryTimestamp: serverDeliveryTimestamp,
+                thread: thread,
+                editTarget: targetMessage,
+                editMessage: editMessage,
+                transaction: tx,
+            )
+        else {
             Logger.info("Failed to insert edit sync message")
             return .invalidEdit
         }
@@ -2001,7 +2052,7 @@ public final class MessageReceiver {
             msg.updateRecipientsFromNonLocalDevice(
                 transcript.recipientStates,
                 isSentUpdate: false,
-                transaction: tx
+                transaction: tx,
             )
         }
 
@@ -2011,7 +2062,7 @@ public final class MessageReceiver {
     private func handleIncomingEnvelope(
         request: MessageReceiverRequest,
         editMessage: SSKProtoEditMessage,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) -> EditProcessingResult {
         guard SDS.fitsInInt64(editMessage.targetSentTimestamp) else {
             Logger.error("Edit message target was invalid timestamp!")
@@ -2032,23 +2083,27 @@ public final class MessageReceiver {
 
         // Find the target message to edit. If missing,
         // return and enqueue the message to be handled as early delivery
-        guard let targetMessage = DependenciesBridge.shared.editMessageStore.editTarget(
-            timestamp: editMessage.targetSentTimestamp,
-            authorAci: decryptedEnvelope.sourceAci,
-            tx: tx
-        ) else {
+        guard
+            let targetMessage = DependenciesBridge.shared.editMessageStore.editTarget(
+                timestamp: editMessage.targetSentTimestamp,
+                authorAci: decryptedEnvelope.sourceAci,
+                tx: tx,
+            )
+        else {
             Logger.warn("Edit cannot find the target message")
             return .editedMessageMissing
         }
 
-        guard let message = try? handleMessageEdit(
-            envelope: decryptedEnvelope,
-            serverDeliveryTimestamp: request.serverDeliveryTimestamp,
-            thread: thread,
-            editTarget: targetMessage,
-            editMessage: editMessage,
-            transaction: tx
-        ) else {
+        guard
+            let message = try? handleMessageEdit(
+                envelope: decryptedEnvelope,
+                serverDeliveryTimestamp: request.serverDeliveryTimestamp,
+                thread: thread,
+                editTarget: targetMessage,
+                editMessage: editMessage,
+                transaction: tx,
+            )
+        else {
             Logger.info("Failed to insert edit message")
             return .invalidEdit
         }
@@ -2069,7 +2124,7 @@ public final class MessageReceiver {
                     forIncomingMessage: message,
                     editTarget: incoming.message,
                     thread: thread,
-                    transaction: tx
+                    transaction: tx,
                 )
             }
         }
@@ -2083,7 +2138,7 @@ public final class MessageReceiver {
         thread: TSThread,
         editTarget: EditMessageTarget,
         editMessage: SSKProtoEditMessage,
-        transaction tx: DBWriteTransaction
+        transaction tx: DBWriteTransaction,
     ) throws -> TSMessage {
 
         guard let dataMessage = editMessage.dataMessage else {
@@ -2100,20 +2155,20 @@ public final class MessageReceiver {
             serverDeliveryTimestamp: serverDeliveryTimestamp,
             thread: thread,
             editTarget: editTarget,
-            tx: tx
+            tx: tx,
         )
 
         // Start downloading any new attachments
         DependenciesBridge.shared.attachmentDownloadManager.enqueueDownloadOfAttachmentsForMessage(
             message,
-            tx: tx
+            tx: tx,
         )
 
         DispatchQueue.main.async {
             SSKEnvironment.shared.typingIndicatorsRef.didReceiveIncomingMessage(
                 inThread: thread,
                 senderAci: envelope.sourceAci,
-                deviceId: envelope.sourceDeviceId
+                deviceId: envelope.sourceDeviceId,
             )
         }
 
@@ -2142,7 +2197,7 @@ public final class MessageReceiver {
     private func handleIncomingEndSessionEnvelope(
         _ decryptedEnvelope: DecryptedIncomingEnvelope,
         withDataMessage dataMessage: SSKProtoDataMessage,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         guard decryptedEnvelope.localIdentity == .aci else {
             owsFailDebug("Can't receive end session messages to our PNI.")
@@ -2151,12 +2206,12 @@ public final class MessageReceiver {
 
         let thread = TSContactThread.getOrCreateThread(
             withContactAddress: SignalServiceAddress(decryptedEnvelope.sourceAci),
-            transaction: tx
+            transaction: tx,
         )
         TSInfoMessage(thread: thread, messageType: .typeRemoteUserEndedSession).anyInsert(transaction: tx)
 
         let sessionStore = DependenciesBridge.shared.signalProtocolStoreManager.signalProtocolStore(for: .aci).sessionStore
-        sessionStore.archiveAllSessions(for: decryptedEnvelope.sourceAci, tx: tx)
+        sessionStore.archiveSessions(forServiceId: decryptedEnvelope.sourceAci, tx: tx)
     }
 }
 
@@ -2507,7 +2562,7 @@ class MessageReceiverRequest {
         for decryptedEnvelope: DecryptedIncomingEnvelope,
         serverDeliveryTimestamp: UInt64,
         shouldDiscardVisibleMessages: Bool,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) -> BuildResult {
         if Self.isDuplicate(decryptedEnvelope, tx: tx) {
             Logger.info("Ignoring previously received envelope from \(decryptedEnvelope.sourceAci) with timestamp: \(decryptedEnvelope.timestamp)")
@@ -2518,12 +2573,12 @@ class MessageReceiverRequest {
             return .noContent
         }
 
-        if contentProto.callMessage != nil && shouldDiscardVisibleMessages {
+        if contentProto.callMessage != nil, shouldDiscardVisibleMessages {
             Logger.info("Discarding message with timestamp \(decryptedEnvelope.timestamp)")
             return .discard
         }
 
-        if decryptedEnvelope.envelope.story && contentProto.dataMessage?.delete == nil {
+        if decryptedEnvelope.envelope.story, contentProto.dataMessage?.delete == nil {
             guard StoryManager.areStoriesEnabled(transaction: tx) else {
                 Logger.info("Discarding story message received while stories are disabled")
                 return .discard
@@ -2542,7 +2597,7 @@ class MessageReceiverRequest {
             decryptedEnvelope: decryptedEnvelope,
             protoContent: contentProto,
             serverDeliveryTimestamp: serverDeliveryTimestamp,
-            shouldDiscardVisibleMessages: shouldDiscardVisibleMessages
+            shouldDiscardVisibleMessages: shouldDiscardVisibleMessages,
         ))
     }
 
@@ -2550,7 +2605,7 @@ class MessageReceiverRequest {
         return InteractionFinder.existsIncomingMessage(
             timestamp: decryptedEnvelope.timestamp,
             sourceAci: decryptedEnvelope.sourceAci,
-            transaction: tx
+            transaction: tx,
         )
     }
 
@@ -2558,7 +2613,7 @@ class MessageReceiverRequest {
         decryptedEnvelope: DecryptedIncomingEnvelope,
         protoContent: SSKProtoContent,
         serverDeliveryTimestamp: UInt64,
-        shouldDiscardVisibleMessages: Bool
+        shouldDiscardVisibleMessages: Bool,
     ) {
         self.decryptedEnvelope = decryptedEnvelope
         self.envelope = decryptedEnvelope.envelope

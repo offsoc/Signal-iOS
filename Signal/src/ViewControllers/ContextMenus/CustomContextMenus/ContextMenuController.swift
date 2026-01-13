@@ -30,10 +30,12 @@ private class ContextMenuHostView: UIView {
 
     private var contentAreaInsets: UIEdgeInsets {
         let minPadding: CGFloat = 8
-        return UIEdgeInsets(top: max(safeAreaInsets.top, minPadding),
-                     leading: max(safeAreaInsets.leading, minPadding),
-                     bottom: max(safeAreaInsets.bottom, minPadding),
-                     trailing: max(safeAreaInsets.trailing, minPadding))
+        return UIEdgeInsets(
+            top: max(safeAreaInsets.top, minPadding),
+            leading: max(safeAreaInsets.leading, minPadding),
+            bottom: max(safeAreaInsets.bottom, minPadding),
+            trailing: max(safeAreaInsets.trailing, minPadding),
+        )
     }
 
     var blurView: UIView? {
@@ -82,7 +84,7 @@ private class ContextMenuHostView: UIView {
     var dismissButton: UIButton? {
         didSet {
             oldValue?.removeFromSuperview()
-            if let dismissButton = dismissButton {
+            if let dismissButton {
                 addSubview(dismissButton)
             }
         }
@@ -131,7 +133,7 @@ private class ContextMenuHostView: UIView {
 
                 // Check for accessory view intersects
                 for accessoryFrame in accessoryFrames {
-                    if accessoryFrame != frame && frame.intersects(accessoryFrame) {
+                    if accessoryFrame != frame, frame.intersects(accessoryFrame) {
                         // We have an intersect! Only handling vertical intersects for now
                         if frame.y < accessoryFrame.maxY {
                             frame.y += accessoryFrame.maxY - frame.y + 12
@@ -189,7 +191,7 @@ private class ContextMenuHostView: UIView {
         if contentHeight > contentRect.height {
             let delta = contentHeight - contentRect.height
             let targetHeight = previewFrame.height - delta
-            let scaleFactor = max((targetHeight / previewFrame.height), minPreviewScaleFactor)
+            let scaleFactor = max(targetHeight / previewFrame.height, minPreviewScaleFactor)
             if previewViewAlignment == .right {
                 let oldWidth = previewFrame.width
                 previewFrame.size = CGSize.scale(previewFrame.size, factor: scaleFactor)
@@ -205,7 +207,7 @@ private class ContextMenuHostView: UIView {
         if contentWidth > contentRect.width {
             let delta = contentWidth - contentRect.width
             let targetWidth = previewFrame.width - delta
-            let scaleFactor = max((targetWidth / previewFrame.width), minPreviewScaleFactor)
+            let scaleFactor = max(targetWidth / previewFrame.width, minPreviewScaleFactor)
             if previewViewAlignment == .right {
                 let oldWidth = previewFrame.width
                 previewFrame.size = CGSize.scale(previewFrame.size, factor: scaleFactor)
@@ -300,7 +302,7 @@ private class ContextMenuHostView: UIView {
             updatedFrame.x += adjust
         }
         if accessoryFrame.minX < contentRect.minX {
-            let adjust =  contentRect.minX - accessoryFrame.minX
+            let adjust = contentRect.minX - accessoryFrame.minX
             updatedFrame.x += adjust
         }
 
@@ -350,6 +352,7 @@ class ContextMenuController: OWSViewController, ContextMenuViewDelegate, UIGestu
         case shadow
         case fade
     }
+
     private let previewRenderMode: PreviewRenderMode
 
     private var gestureExitedDeadZone: Bool = false
@@ -387,14 +390,14 @@ class ContextMenuController: OWSViewController, ContextMenuViewDelegate, UIGestu
 
     private var emojiPickerSheet: EmojiPickerSheet?
 
-    init (
+    init(
         configuration: ContextMenuConfiguration,
         preview: ContextMenuTargetedPreview,
         initiatingGestureRecognizer: UIGestureRecognizer?,
         menuAccessory: ContextMenuActionsAccessory?,
         presentImmediately: Bool = true,
         renderBackgroundBlur: Bool = true,
-        previewRenderMode: PreviewRenderMode = .shadow
+        previewRenderMode: PreviewRenderMode = .shadow,
     ) {
         self.contextMenuConfiguration = configuration
         self.contextMenuPreview = preview
@@ -474,7 +477,7 @@ class ContextMenuController: OWSViewController, ContextMenuViewDelegate, UIGestu
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
 
-        guard let previewView = previewView else {
+        guard let previewView else {
             owsFailDebug("Cannot animate without preview view!")
             return
         }
@@ -485,9 +488,15 @@ class ContextMenuController: OWSViewController, ContextMenuViewDelegate, UIGestu
             if self.renderBackgroundBlur {
                 if !UIDevice.current.isIPad {
                     self.blurView.effect = UIBlurEffect(style: UIBlurEffect.Style.regular)
-                    self.blurView.backgroundColor = self.contextMenuConfiguration.forceDarkTheme || Theme.isDarkThemeEnabled ? UIColor.ows_whiteAlpha20 : UIColor.ows_blackAlpha20
+                    self.blurView.backgroundColor = UIColor { traitCollection in
+                        if traitCollection.userInterfaceStyle == .dark {
+                            UIColor.white.withAlphaComponent(0.2)
+                        } else {
+                            UIColor.black.withAlphaComponent(0.2)
+                        }
+                    }
                 } else {
-                    self.blurView.backgroundColor = UIColor.ows_blackAlpha40
+                    self.blurView.backgroundColor = UIColor.black.withAlphaComponent(0.4)
                 }
             }
 
@@ -549,9 +558,10 @@ class ContextMenuController: OWSViewController, ContextMenuViewDelegate, UIGestu
                     self.previewView?.transform = CGAffineTransform.identity
 
                     self.auxiliaryPreviewView?.frame = finalAuxFrame
-                }) { _ in
-                    self.animationState = .none
-                    UIAccessibility.post(notification: .layoutChanged, argument: self.dismissButton)
+                },
+            ) { _ in
+                self.animationState = .none
+                UIAccessibility.post(notification: .layoutChanged, argument: self.dismissButton)
             }
         } else {
             // Re-scale to match original size, on the original scaling curve
@@ -562,7 +572,7 @@ class ContextMenuController: OWSViewController, ContextMenuViewDelegate, UIGestu
                 animations: {
                     self.previewView?.transform = CGAffineTransform.identity
                 },
-                completion: nil
+                completion: nil,
             )
         }
 
@@ -574,9 +584,9 @@ class ContextMenuController: OWSViewController, ContextMenuViewDelegate, UIGestu
 
     // MARK: Public
 
-    public func animateOut(_ completion: @escaping () -> Void) {
+    func animateOut(_ completion: @escaping () -> Void) {
 
-        guard let previewView = previewView else {
+        guard let previewView else {
             owsFailDebug("Cannot animate without preview view!")
             completion()
             return
@@ -631,7 +641,7 @@ class ContextMenuController: OWSViewController, ContextMenuViewDelegate, UIGestu
                 },
                 completion: { _ in
                     dispatchGroup.leave()
-                }
+                },
             )
         }
 
@@ -652,7 +662,8 @@ class ContextMenuController: OWSViewController, ContextMenuViewDelegate, UIGestu
     }
 
     // MARK: Gesture Recognizer Support
-    public func gestureDidChange() {
+
+    func gestureDidChange() {
         guard !UIAccessibility.isVoiceOverRunning else {
             return
         }
@@ -667,7 +678,7 @@ class ContextMenuController: OWSViewController, ContextMenuViewDelegate, UIGestu
 
                 let distanceFromInitialLocation = abs(hypot(
                     locationInView.x - initialTouchLocation.x,
-                    locationInView.y - initialTouchLocation.y
+                    locationInView.y - initialTouchLocation.y,
                 ))
                 gestureExitedDeadZone = distanceFromInitialLocation >= deadZoneRadius
 
@@ -675,14 +686,14 @@ class ContextMenuController: OWSViewController, ContextMenuViewDelegate, UIGestu
             }
 
             for accessory in accessoryViews {
-                let locationInAccessory = view .convert(locationInView, to: accessory.accessoryView)
+                let locationInAccessory = view.convert(locationInView, to: accessory.accessoryView)
                 accessory.touchLocationInViewDidChange(locationInView: locationInAccessory)
             }
         }
 
     }
 
-    public func gestureDidEnd() {
+    func gestureDidEnd() {
         guard !UIAccessibility.isVoiceOverRunning else {
             return
         }
@@ -707,7 +718,7 @@ class ContextMenuController: OWSViewController, ContextMenuViewDelegate, UIGestu
         var accessoryHandledTouch = false
         if let locationInView = gestureRecognizer?.location(in: view) {
             for accessory in accessoryViews {
-                let locationInAccessory = view .convert(locationInView, to: accessory.accessoryView)
+                let locationInAccessory = view.convert(locationInView, to: accessory.accessoryView)
                 let handled = accessory.touchLocationInViewDidEnd(locationInView: locationInAccessory)
                 if !accessoryHandledTouch {
                     accessoryHandledTouch = handled
@@ -722,9 +733,10 @@ class ContextMenuController: OWSViewController, ContextMenuViewDelegate, UIGestu
     }
 
     // MARK: Emoji Sheet
-    public func showEmojiSheet(message: TSMessage, completion: @escaping (String) -> Void) {
+
+    func showEmojiSheet(message: TSMessage, completion: @escaping (String) -> Void) {
         let picker = EmojiPickerSheet(message: message) { [weak self] emoji in
-            guard let self = self else { return }
+            guard let self else { return }
 
             guard let emojiString = emoji?.rawValue else {
                 self.delegate?.contextMenuControllerRequestsDismissal(self)
@@ -737,7 +749,7 @@ class ContextMenuController: OWSViewController, ContextMenuViewDelegate, UIGestu
         present(picker, animated: true)
     }
 
-    public func dismissEmojiSheet(animated: Bool, completion: @escaping () -> Void) {
+    func dismissEmojiSheet(animated: Bool, completion: @escaping () -> Void) {
         emojiPickerSheet?.dismiss(animated: true, completion: completion)
     }
 

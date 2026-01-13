@@ -21,7 +21,7 @@ class StickerPickerView: UIView {
 
     init(
         delegate: StickerPickerViewDelegate,
-        storyStickerConfiguration: StoryStickerConfiguration = .hide
+        storyStickerConfiguration: StoryStickerConfiguration = .hide,
     ) {
         self.delegate = delegate
         self.storyStickerConfigation = storyStickerConfiguration
@@ -75,7 +75,7 @@ class StickerPickerView: UIView {
     private lazy var toolbar = StickerPacksToolbar(delegate: self)
     private lazy var stickerPageView = StickerPickerPageView(
         delegate: self,
-        storyStickerConfiguration: storyStickerConfigation
+        storyStickerConfiguration: storyStickerConfigation,
     )
 
     override func layoutMarginsDidChange() {
@@ -244,8 +244,11 @@ private class StickerPacksToolbar: UIView {
     }
 
     private var bottomContentMargin: CGFloat {
-        // Use non-zero padding on devices with the home button that doesn't have bottom safe area inset.
-        safeAreaInsets.bottom == 0 ? Metrics.minimumBottomMargin : safeAreaInsets.bottom
+        // Use 8 dp padding on devices with the home button that doesn't have bottom safe area inset.
+        // Use fixed 28 dp padding on devices with a bottom safe area inset. The intent is to
+        // make the toolbar wider than it would have been if we used default safeAreaInsets.bottom (30+ dp) insets.
+        // The width is increased because side margins are made the same as this bottom margin.
+        safeAreaInsets.bottom == 0 ? Metrics.minimumBottomMargin : 28
     }
 
     override func layoutSubviews() {
@@ -279,7 +282,7 @@ private class StickerPacksToolbar: UIView {
             x: sideMargin,
             y: 0,
             width: glassPanelWidth,
-            height: Metrics.collectionViewHeight + 2 * Metrics.listVMargin
+            height: Metrics.collectionViewHeight + 2 * Metrics.listVMargin,
         )
 
         // Content is inset from glass panel's edges by the same amount on all sides.
@@ -298,13 +301,13 @@ private class StickerPacksToolbar: UIView {
             x: layoutMargins.left,
             y: Metrics.listVMargin,
             width: bounds.width - layoutMargins.totalWidth,
-            height: Metrics.collectionViewHeight
+            height: Metrics.collectionViewHeight,
         )
     }
 
     private enum Metrics {
         static let listItemCellSize: CGFloat = 40 // side of each collection view cell.
-        static let listItemContentInset: CGFloat = 8 // how much cell's content is inset from cell's edges.
+        static let listItemContentInset: CGFloat = 6 // how much cell's content is inset from cell's edges.
         static let listItemSpacing: CGFloat = 4 // between cells
 
         static let listVMargin: CGFloat = 4 // spacing above and below collection view
@@ -318,7 +321,7 @@ private class StickerPacksToolbar: UIView {
 
     // [scrollable list ][manage button]
     private lazy var stackView: UIStackView = {
-        let stackView = UIStackView(arrangedSubviews: [ packsCollectionView, buttonManageStickers ])
+        let stackView = UIStackView(arrangedSubviews: [packsCollectionView, buttonManageStickers])
         stackView.axis = .horizontal
         stackView.spacing = Metrics.listItemSpacing
         return stackView
@@ -328,7 +331,7 @@ private class StickerPacksToolbar: UIView {
         StickerHorizontalListView(
             cellSize: Metrics.listItemCellSize,
             cellContentInset: Metrics.listItemContentInset,
-            spacing: Metrics.listItemSpacing
+            spacing: Metrics.listItemSpacing,
         )
     }()
 
@@ -338,7 +341,7 @@ private class StickerPacksToolbar: UIView {
             primaryAction: UIAction { [weak self] _ in
                 guard let self else { return }
                 self.delegate?.presentManageStickersView(for: self)
-            }
+            },
         )
         if #available(iOS 26, *) {
             button.configuration?.cornerStyle = .capsule
@@ -384,7 +387,7 @@ private class StickerPickerPageView: UIView {
 
     init(
         delegate: StickerPickerPageViewDelegate,
-        storyStickerConfiguration: StoryStickerConfiguration = .hide
+        storyStickerConfiguration: StoryStickerConfiguration = .hide,
     ) {
         self.delegate = delegate
         self.storyStickerConfiguration = storyStickerConfiguration
@@ -397,13 +400,15 @@ private class StickerPickerPageView: UIView {
         // By default, show the "recent" stickers.
         assert(nil == selectedStickerPack)
 
-        NotificationCenter.default.addObserver(self,
-                                               selector: #selector(stickersOrPacksDidChange),
-                                               name: StickerManager.stickersOrPacksDidChange,
-                                               object: nil)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(stickersOrPacksDidChange),
+            name: StickerManager.stickersOrPacksDidChange,
+            object: nil,
+        )
     }
 
-    required public init(coder: NSCoder) {
+    required init(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
@@ -462,7 +467,7 @@ private class StickerPickerPageView: UIView {
     private func reloadStickers() {
         let oldStickerPacks = stickerPacks
 
-        SSKEnvironment.shared.databaseStorageRef.read { (transaction) in
+        SSKEnvironment.shared.databaseStorageRef.read { transaction in
             self.stickerPacks = StickerManager.installedStickerPacks(transaction: transaction).sorted {
                 $0.dateCreated > $1.dateCreated
             }
@@ -477,9 +482,9 @@ private class StickerPickerPageView: UIView {
             },
             isSelectedBlock: { [weak self] in
                 self?.selectedStickerPack == nil
-            }
+            },
         ))
-        items += stickerPacks.map { (stickerPack) in
+        items += stickerPacks.map { stickerPack in
             StickerHorizontalListViewItemSticker(
                 stickerInfo: stickerPack.coverInfo,
                 didSelectBlock: { [weak self] in
@@ -488,7 +493,7 @@ private class StickerPickerPageView: UIView {
                 isSelectedBlock: { [weak self] in
                     self?.selectedStickerPack?.info == stickerPack.info
                 },
-                cache: reusableStickerViewCache
+                cache: reusableStickerViewCache,
             )
         }
         delegate?.setItems(items)
@@ -506,7 +511,7 @@ private class StickerPickerPageView: UIView {
         guard oldStickerPacks != stickerPacks else { return }
 
         // If the selected pack was uninstalled, select the first pack.
-        if let selectedStickerPack = selectedStickerPack, !stickerPacks.contains(selectedStickerPack) {
+        if let selectedStickerPack, !stickerPacks.contains(selectedStickerPack) {
             updateSelectedStickerPack(stickerPacks.first)
         }
 
@@ -621,27 +626,27 @@ private class StickerPickerPageView: UIView {
         NSLayoutConstraint.activate([
             // Pin all edges to scroll view's content layout guide.
             stickerPagesContainer.topAnchor.constraint(
-                equalTo: stickerPagingScrollView.contentLayoutGuide.topAnchor
+                equalTo: stickerPagingScrollView.contentLayoutGuide.topAnchor,
             ),
             stickerPagesContainer.leadingAnchor.constraint(
-                equalTo: stickerPagingScrollView.contentLayoutGuide.leadingAnchor
+                equalTo: stickerPagingScrollView.contentLayoutGuide.leadingAnchor,
             ),
             stickerPagesContainer.trailingAnchor.constraint(
-                equalTo: stickerPagingScrollView.contentLayoutGuide.trailingAnchor
+                equalTo: stickerPagingScrollView.contentLayoutGuide.trailingAnchor,
             ),
             stickerPagesContainer.bottomAnchor.constraint(
-                equalTo: stickerPagingScrollView.contentLayoutGuide.bottomAnchor
+                equalTo: stickerPagingScrollView.contentLayoutGuide.bottomAnchor,
             ),
 
             // Height must be equal to height of `stickerPagingScrollView`.
             stickerPagesContainer.heightAnchor.constraint(
-                equalTo: stickerPagingScrollView.frameLayoutGuide.heightAnchor
+                equalTo: stickerPagingScrollView.frameLayoutGuide.heightAnchor,
             ),
 
             // Width is width of `stickerPagingScrollView` * number of pages.
             stickerPagesContainer.widthAnchor.constraint(
                 equalTo: stickerPagingScrollView.frameLayoutGuide.widthAnchor,
-                multiplier: numberOfPages
+                multiplier: numberOfPages,
             ),
         ])
 
@@ -662,7 +667,7 @@ private class StickerPickerPageView: UIView {
             // Calculate X-position for each page. Make sure to use `left` instead of `leading`.
             let xPositionConstraint = collectionView.leftAnchor.constraint(
                 equalTo: stickerPagesContainer.leftAnchor,
-                constant: CGFloat(index) * pageWidth
+                constant: CGFloat(index) * pageWidth,
             )
             NSLayoutConstraint.activate([
                 // Each page is as wide as the view or `stickerPagingScrollView` is.
@@ -702,7 +707,7 @@ private class StickerPickerPageView: UIView {
                 self.previousPageCollectionView.showInstalledPackOrRecents(stickerPack: self.previousPageStickerPack)
             }
 
-        // We're paging forwards!
+            // We're paging forwards!
         } else if oldSelectedPack == previousPageStickerPack {
             // The next page becomes the current page and the current page becomes
             // the previous page. We have to load the new next.
@@ -714,7 +719,7 @@ private class StickerPickerPageView: UIView {
                 self.nextPageCollectionView.showInstalledPackOrRecents(stickerPack: self.nextPageStickerPack)
             }
 
-        // We didn't get here through paging, stuff probably changed. Reload all the things.
+            // We didn't get here through paging, stuff probably changed. Reload all the things.
         } else {
             currentPageCollectionView.showInstalledPackOrRecents(stickerPack: selectedStickerPack)
             previousPageCollectionView.showInstalledPackOrRecents(stickerPack: previousPageStickerPack)
@@ -753,14 +758,14 @@ private class StickerPickerPageView: UIView {
         }
 
         // Scrolling backwards
-        if !ignoreScrollingState && stickerPagingScrollView.contentOffset.x <= previousPageThreshold {
+        if !ignoreScrollingState, stickerPagingScrollView.contentOffset.x <= previousPageThreshold {
             stickerPagingScrollView.contentOffset.x += pageWidth
 
-        // Scrolling forward
-        } else if !ignoreScrollingState && stickerPagingScrollView.contentOffset.x >= nextPageThreshold {
+            // Scrolling forward
+        } else if !ignoreScrollingState, stickerPagingScrollView.contentOffset.x >= nextPageThreshold {
             stickerPagingScrollView.contentOffset.x -= pageWidth
 
-        // Not moving forward or back, just scroll back to center so we can go forward and back again
+            // Not moving forward or back, just scroll back to center so we can go forward and back again
         } else {
             stickerPagingScrollView.contentOffset.x = pageWidth
         }
@@ -815,7 +820,7 @@ private class StickerPickerPageView: UIView {
             // We're about to cross the threshold into a new page, execute any pending updates.
             // We wait to execute these until we're sure we're going to cross over as it
             // can cause some UI jitter that interrupts scrolling.
-        } else if offsetX >= pageWidth * 0.95 && offsetX <= pageWidth * 1.05 {
+        } else if offsetX >= pageWidth * 0.95, offsetX <= pageWidth * 1.05 {
             applyPendingPageChangeUpdates()
         }
 

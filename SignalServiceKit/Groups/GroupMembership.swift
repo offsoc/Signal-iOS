@@ -12,7 +12,7 @@ private enum GroupMemberState: Equatable, Codable, CustomStringConvertible {
     case fullMember(
         role: TSGroupMemberRole,
         didJoinFromInviteLink: Bool,
-        didJoinFromAcceptedJoinRequest: Bool
+        didJoinFromAcceptedJoinRequest: Bool,
     )
     case invited(role: TSGroupMemberRole, addedByAci: Aci)
     case requesting
@@ -79,12 +79,12 @@ private enum GroupMemberState: Equatable, Codable, CustomStringConvertible {
             let didJoinFromInviteLink = try container.decodeIfPresent(Bool.self, forKey: .didJoinFromInviteLink) ?? false
             let didJoinFromAcceptedJoinRequest = try container.decodeIfPresent(
                 Bool.self,
-                forKey: .didJoinFromAcceptedJoinRequest
+                forKey: .didJoinFromAcceptedJoinRequest,
             ) ?? false
             self = .fullMember(
                 role: role,
                 didJoinFromInviteLink: didJoinFromInviteLink,
-                didJoinFromAcceptedJoinRequest: didJoinFromAcceptedJoinRequest
+                didJoinFromAcceptedJoinRequest: didJoinFromAcceptedJoinRequest,
             )
         case .invited:
             let role = try container.decode(TSGroupMemberRole.self, forKey: .role)
@@ -105,7 +105,7 @@ private enum GroupMemberState: Equatable, Codable, CustomStringConvertible {
             try container.encode(didJoinFromInviteLink, forKey: .didJoinFromInviteLink)
             try container.encode(
                 didJoinFromAcceptedJoinRequest,
-                forKey: .didJoinFromAcceptedJoinRequest
+                forKey: .didJoinFromAcceptedJoinRequest,
             )
         case .invited(let role, let addedByAci):
             try container.encode(TypeKey.invited, forKey: .typeKey)
@@ -118,7 +118,7 @@ private enum GroupMemberState: Equatable, Codable, CustomStringConvertible {
 
     // MARK: -
 
-    public var description: String {
+    var description: String {
         switch self {
         case .fullMember: return ".fullMember"
         case .invited: return ".invited"
@@ -130,7 +130,7 @@ private enum GroupMemberState: Equatable, Codable, CustomStringConvertible {
 // MARK: -
 
 @objc
-public class GroupMembership: MTLModel {
+public class GroupMembership: NSObject, NSCoding {
 
     // MARK: Types
 
@@ -153,7 +153,7 @@ public class GroupMembership: MTLModel {
     }
 
     @objc
-    public override init() {
+    override public init() {
         self.memberStates = [:]
         self.bannedMembers = [:]
         self.invalidInviteMap = [:]
@@ -162,7 +162,7 @@ public class GroupMembership: MTLModel {
     }
 
     @objc
-    required public init?(coder aDecoder: NSCoder) {
+    public required init?(coder aDecoder: NSCoder) {
         if let invalidInviteMap = aDecoder.decodeObject(forKey: Self.invalidInviteMapKey) as? InvalidInviteMap {
             self.invalidInviteMap = invalidInviteMap
         } else {
@@ -202,7 +202,7 @@ public class GroupMembership: MTLModel {
     private static var bannedMembersKey: String { "bannedMembers" }
     private static var invalidInviteMapKey: String { "invalidInviteMap" }
 
-    public override func encode(with aCoder: NSCoder) {
+    public func encode(with aCoder: NSCoder) {
         let encoder = JSONEncoder()
         do {
             let memberStatesData = try encoder.encode(self.memberStates)
@@ -215,15 +215,10 @@ public class GroupMembership: MTLModel {
         aCoder.encode(invalidInviteMap, forKey: Self.invalidInviteMapKey)
     }
 
-    @objc
-    public required init(dictionary dictionaryValue: [String: Any]!) throws {
-        fatalError("init(dictionary:) has not been implemented")
-    }
-
     fileprivate init(
         memberStates: MemberStateMap,
         bannedMembers: BannedMembersMap,
-        invalidInviteMap: InvalidInviteMap
+        invalidInviteMap: InvalidInviteMap,
     ) {
         self.memberStates = memberStates
         self.bannedMembers = bannedMembers
@@ -243,26 +238,28 @@ public class GroupMembership: MTLModel {
         super.init()
     }
 
-    #if TESTABLE_BUILD
+#if TESTABLE_BUILD
     /// Construction for tests is functionally equivalent to construction of a
     /// group membership for a legacy, V1 group model.
     public convenience init(membersForTest: [SignalServiceAddress]) {
         self.init(v1Members: membersForTest)
     }
-    #endif
+#endif
 
     // MARK: - Equality
 
     @objc
-    public override func isEqual(_ object: Any!) -> Bool {
+    override public func isEqual(_ object: Any!) -> Bool {
         guard let other = object as? GroupMembership else {
             return false
         }
 
-        guard Self.memberStates(
-            self.memberStates,
-            areEqualTo: other.memberStates
-        ) else {
+        guard
+            Self.memberStates(
+                self.memberStates,
+                areEqualTo: other.memberStates,
+            )
+        else {
             return false
         }
 
@@ -283,7 +280,7 @@ public class GroupMembership: MTLModel {
     /// only in these fields, we want to consider them equal to avoid clobbering our local state.
     private static func memberStates(
         _ memberStates: MemberStateMap,
-        areEqualTo otherMemberStates: MemberStateMap
+        areEqualTo otherMemberStates: MemberStateMap,
     ) -> Bool {
 
         func hardcodeDidJoinViaInviteLink(for groupMemberState: GroupMemberState) -> GroupMemberState {
@@ -292,7 +289,7 @@ public class GroupMembership: MTLModel {
                 return .fullMember(
                     role: role,
                     didJoinFromInviteLink: false,
-                    didJoinFromAcceptedJoinRequest: false
+                    didJoinFromAcceptedJoinRequest: false,
                 )
             default:
                 return groupMemberState
@@ -303,7 +300,7 @@ public class GroupMembership: MTLModel {
             return false
         }
 
-        return memberStates.allSatisfy { (key, value) -> Bool in
+        return memberStates.allSatisfy { key, value -> Bool in
             guard let otherValue = otherMemberStates[key] else { return false }
             return hardcodeDidJoinViaInviteLink(for: value) == hardcodeDidJoinViaInviteLink(for: otherValue)
         }
@@ -326,7 +323,7 @@ public class GroupMembership: MTLModel {
                 memberState = .fullMember(
                     role: legacyMemberState.role,
                     didJoinFromInviteLink: false,
-                    didJoinFromAcceptedJoinRequest: false
+                    didJoinFromAcceptedJoinRequest: false,
                 )
             }
             result[address] = memberState
@@ -344,11 +341,11 @@ public class GroupMembership: MTLModel {
         return Builder(
             memberStates: memberStates,
             bannedMembers: bannedMembers,
-            invalidInviteMap: invalidInviteMap
+            invalidInviteMap: invalidInviteMap,
         )
     }
 
-    public override var debugDescription: String {
+    override public var debugDescription: String {
         var result = "[\n"
         for address in allMembersOfAnyKind.sorted(by: { ($0.serviceId?.serviceIdString ?? "") < ($1.serviceId?.serviceIdString ?? "") }) {
             guard let memberState = memberStates[address] else {
@@ -605,7 +602,7 @@ public class GroupMembership: MTLModel {
         fileprivate init(
             memberStates: MemberStateMap,
             bannedMembers: BannedMembersMap,
-            invalidInviteMap: InvalidInviteMap
+            invalidInviteMap: InvalidInviteMap,
         ) {
             self.memberStates = memberStates
             self.bannedMembers = bannedMembers
@@ -632,13 +629,13 @@ public class GroupMembership: MTLModel {
             _ aci: Aci,
             role: TSGroupMemberRole,
             didJoinFromInviteLink: Bool = false,
-            didJoinFromAcceptedJoinRequest: Bool = false
+            didJoinFromAcceptedJoinRequest: Bool = false,
         ) {
             addFullMember(
                 SignalServiceAddress(aci),
                 role: role,
                 didJoinFromInviteLink: didJoinFromInviteLink,
-                didJoinFromAcceptedJoinRequest: didJoinFromAcceptedJoinRequest
+                didJoinFromAcceptedJoinRequest: didJoinFromAcceptedJoinRequest,
             )
         }
 
@@ -646,13 +643,13 @@ public class GroupMembership: MTLModel {
             _ address: SignalServiceAddress,
             role: TSGroupMemberRole,
             didJoinFromInviteLink: Bool = false,
-            didJoinFromAcceptedJoinRequest: Bool = false
+            didJoinFromAcceptedJoinRequest: Bool = false,
         ) {
             addFullMembers(
                 [address],
                 role: role,
                 didJoinFromInviteLink: didJoinFromInviteLink,
-                didJoinFromAcceptedJoinRequest: didJoinFromAcceptedJoinRequest
+                didJoinFromAcceptedJoinRequest: didJoinFromAcceptedJoinRequest,
             )
         }
 
@@ -660,7 +657,7 @@ public class GroupMembership: MTLModel {
             _ addresses: Set<SignalServiceAddress>,
             role: TSGroupMemberRole,
             didJoinFromInviteLink: Bool = false,
-            didJoinFromAcceptedJoinRequest: Bool = false
+            didJoinFromAcceptedJoinRequest: Bool = false,
         ) {
             // Dupe is not necessarily an error; you might know of the UUID
             // mapping for a user that another group member doesn't know about.
@@ -669,9 +666,9 @@ public class GroupMembership: MTLModel {
                 withState: .fullMember(
                     role: role,
                     didJoinFromInviteLink: didJoinFromInviteLink,
-                    didJoinFromAcceptedJoinRequest: didJoinFromAcceptedJoinRequest
+                    didJoinFromAcceptedJoinRequest: didJoinFromAcceptedJoinRequest,
                 ),
-                failOnDupe: false
+                failOnDupe: false,
             )
         }
 
@@ -682,7 +679,7 @@ public class GroupMembership: MTLModel {
         public mutating func addInvitedMember(
             _ address: SignalServiceAddress,
             role: TSGroupMemberRole,
-            addedByAci: Aci
+            addedByAci: Aci,
         ) {
             addInvitedMembers([address], role: role, addedByAci: addedByAci)
         }
@@ -690,7 +687,7 @@ public class GroupMembership: MTLModel {
         public mutating func addInvitedMembers(
             _ addresses: Set<SignalServiceAddress>,
             role: TSGroupMemberRole,
-            addedByAci: Aci
+            addedByAci: Aci,
         ) {
             addMembers(addresses, withState: .invited(role: role, addedByAci: addedByAci))
         }
@@ -710,7 +707,7 @@ public class GroupMembership: MTLModel {
         private mutating func addMembers(
             _ addresses: Set<SignalServiceAddress>,
             withState memberState: GroupMemberState,
-            failOnDupe: Bool = true
+            failOnDupe: Bool = true,
         ) {
             for address in addresses {
                 guard memberStates[address] == nil else {
@@ -779,7 +776,7 @@ public class GroupMembership: MTLModel {
             return GroupMembership(
                 memberStates: memberStates,
                 bannedMembers: bannedMembers,
-                invalidInviteMap: invalidInviteMap
+                invalidInviteMap: invalidInviteMap,
             )
         }
     }
@@ -874,76 +871,101 @@ public class GroupMembership: MTLModel {
 // MARK: - InvalidInviteModel
 
 @objc(GroupMembershipInvalidInviteModel)
-private class InvalidInviteModel: MTLModel {
-    @objc
-    var userId: Data?
+private final class InvalidInviteModel: NSObject, NSCoding, NSCopying {
+    init?(coder: NSCoder) {
+        self.addedByUserId = coder.decodeObject(of: NSData.self, forKey: "addedByUserId") as Data?
+        self.userId = coder.decodeObject(of: NSData.self, forKey: "userId") as Data?
+    }
 
-    @objc
-    var addedByUserId: Data?
+    func encode(with coder: NSCoder) {
+        if let addedByUserId {
+            coder.encode(addedByUserId, forKey: "addedByUserId")
+        }
+        if let userId {
+            coder.encode(userId, forKey: "userId")
+        }
+    }
+
+    override var hash: Int {
+        var hasher = Hasher()
+        hasher.combine(addedByUserId)
+        hasher.combine(userId)
+        return hasher.finalize()
+    }
+
+    override func isEqual(_ object: Any?) -> Bool {
+        guard let object = object as? Self else { return false }
+        guard type(of: self) == type(of: object) else { return false }
+        guard self.addedByUserId == object.addedByUserId else { return false }
+        guard self.userId == object.userId else { return false }
+        return true
+    }
+
+    func copy(with zone: NSZone? = nil) -> Any {
+        return self
+    }
+
+    let userId: Data?
+    let addedByUserId: Data?
 
     init(userId: Data?, addedByUserId: Data? = nil) {
         self.userId = userId
         self.addedByUserId = addedByUserId
-        super.init()
-    }
-
-    @objc
-    public override init() {
-        super.init()
-    }
-
-    @objc
-    required public init?(coder aDecoder: NSCoder) {
-        super.init(coder: aDecoder)
-    }
-
-    @objc
-    public required init(dictionary dictionaryValue: [String: Any]!) throws {
-        try super.init(dictionary: dictionaryValue)
     }
 }
 
 // MARK: - LegacyMemberState
 
 @objc(_TtCC16SignalServiceKit15GroupMembership11MemberState)
-private class LegacyMemberState: MTLModel {
-    @objc
-    var role: TSGroupMemberRole = .normal
-
-    @objc
-    var isPending: Bool = false
-
-    // Only applies for pending members.
-    @objc
-    var addedByUuid: UUID?
-
-    @objc
-    public override init() {
-        super.init()
+private final class LegacyMemberState: NSObject, NSCoding, NSCopying {
+    init?(coder: NSCoder) {
+        self.addedByUuid = coder.decodeObject(of: NSUUID.self, forKey: "addedByUuid") as UUID?
+        self.isPending = coder.decodeObject(of: NSNumber.self, forKey: "isPending")?.boolValue ?? false
+        self.role = (coder.decodeObject(of: NSNumber.self, forKey: "role")?.uintValue).flatMap(TSGroupMemberRole.init(rawValue:)) ?? .normal
     }
 
-    init(role: TSGroupMemberRole,
-         isPending: Bool,
-         addedByUuid: UUID? = nil) {
+    func encode(with coder: NSCoder) {
+        if let addedByUuid {
+            coder.encode(addedByUuid, forKey: "addedByUuid")
+        }
+        coder.encode(NSNumber(value: self.isPending), forKey: "isPending")
+        coder.encode(NSNumber(value: self.role.rawValue), forKey: "role")
+    }
+
+    override var hash: Int {
+        var hasher = Hasher()
+        hasher.combine(addedByUuid)
+        hasher.combine(isPending)
+        hasher.combine(role)
+        return hasher.finalize()
+    }
+
+    override func isEqual(_ object: Any?) -> Bool {
+        guard let object = object as? Self else { return false }
+        guard type(of: self) == type(of: object) else { return false }
+        guard self.addedByUuid == object.addedByUuid else { return false }
+        guard self.isPending == object.isPending else { return false }
+        guard self.role == object.role else { return false }
+        return true
+    }
+
+    func copy(with zone: NSZone? = nil) -> Any {
+        return self
+    }
+
+    let role: TSGroupMemberRole
+    let isPending: Bool
+    // Only applies for pending members.
+    let addedByUuid: UUID?
+
+    init(role: TSGroupMemberRole, isPending: Bool, addedByUuid: UUID? = nil) {
         self.role = role
         self.isPending = isPending
         self.addedByUuid = addedByUuid
-
-        super.init()
     }
 
     @objc
-    required public init?(coder aDecoder: NSCoder) {
-        super.init(coder: aDecoder)
-    }
-
-    @objc
-    public required init(dictionary dictionaryValue: [String: Any]!) throws {
-        try super.init(dictionary: dictionaryValue)
-    }
-
-    @objc
-    public var isAdministrator: Bool {
+    var isAdministrator: Bool {
         return role == .administrator
     }
 }

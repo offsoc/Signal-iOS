@@ -9,7 +9,7 @@ import LibSignalClient
 public class AccountChecker {
     private let db: any DB
     private let networkManager: NetworkManager
-    private let recipientFetcher: any RecipientFetcher
+    private let recipientFetcher: RecipientFetcher
     private let recipientManager: any SignalRecipientManager
     private let recipientMerger: any RecipientMerger
     private let recipientStore: RecipientDatabaseTable
@@ -25,11 +25,11 @@ public class AccountChecker {
     init(
         db: any DB,
         networkManager: NetworkManager,
-        recipientFetcher: any RecipientFetcher,
+        recipientFetcher: RecipientFetcher,
         recipientManager: any SignalRecipientManager,
         recipientMerger: any RecipientMerger,
         recipientStore: RecipientDatabaseTable,
-        tsAccountManager: any TSAccountManager
+        tsAccountManager: any TSAccountManager,
     ) {
         self.db = db
         self.networkManager = networkManager
@@ -68,7 +68,7 @@ public class AccountChecker {
     func markAsUnregisteredAndSplitRecipientIfNeeded(
         serviceId: ServiceId,
         shouldUpdateStorageService: Bool,
-        tx: DBWriteTransaction
+        tx: DBWriteTransaction,
     ) {
         AssertNotOnMainThread()
 
@@ -80,7 +80,7 @@ public class AccountChecker {
             &recipient,
             unregisteredAt: .now,
             shouldUpdateStorageService: shouldUpdateStorageService,
-            tx: tx
+            tx: tx,
         )
 
         guard let localIdentifiers = tsAccountManager.localIdentifiers(tx: tx) else {
@@ -91,7 +91,7 @@ public class AccountChecker {
         recipientMerger.splitUnregisteredRecipientIfNeeded(
             localIdentifiers: localIdentifiers,
             unregisteredRecipient: &recipient,
-            tx: tx
+            tx: tx,
         )
     }
 }

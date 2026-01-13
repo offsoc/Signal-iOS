@@ -60,7 +60,12 @@ public extension SDSModel {
             FROM \(sdsTableName)
             WHERE uniqueId == ?
         """
-        tx.database.executeAndCacheStatementHandlingErrors(sql: sql, arguments: [uniqueId])
+        failIfThrows {
+            try tx.database.execute(
+                sql: sql,
+                arguments: [uniqueId],
+            )
+        }
 
         anyDidRemove(with: tx)
     }
@@ -96,7 +101,7 @@ public extension SDSModel {
         transaction: DBReadTransaction,
         sql: String,
         batchSize: UInt,
-        block: (String, UnsafeMutablePointer<ObjCBool>) -> Void
+        block: (String, UnsafeMutablePointer<ObjCBool>) -> Void,
     ) {
         do {
             let cursor = try String.fetchCursor(transaction.database, sql: sql)

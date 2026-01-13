@@ -8,11 +8,10 @@ public import SignalUI
 
 public class EmojiReactionPickerConfigViewController: UIViewController {
 
-    private lazy var reactionPicker =  MessageReactionPicker(
+    private lazy var reactionPicker = MessageReactionPicker(
         selectedEmoji: nil,
         delegate: nil,
         style: .configure,
-        forceDarkTheme: self.forceDarkTheme
     )
 
     private let instructionLabel: UILabel = {
@@ -23,15 +22,11 @@ public class EmojiReactionPickerConfigViewController: UIViewController {
         return label
     }()
 
-    private let forceDarkTheme: Bool
-
     private let reactionPickerConfigurationListener: ReactionPickerConfigurationListener?
 
     init(
-        forceDarkTheme: Bool = false,
-        reactionPickerConfigurationListener: ReactionPickerConfigurationListener? = nil
+        reactionPickerConfigurationListener: ReactionPickerConfigurationListener? = nil,
     ) {
-        self.forceDarkTheme = forceDarkTheme
         self.reactionPickerConfigurationListener = reactionPickerConfigurationListener
         super.init(nibName: nil, bundle: nil)
     }
@@ -40,7 +35,7 @@ public class EmojiReactionPickerConfigViewController: UIViewController {
         fatalError("init(coder:) has not been implemented")
     }
 
-    public override func viewDidLoad() {
+    override public func viewDidLoad() {
         super.viewDidLoad()
         title = OWSLocalizedString("CONFIGURE_REACTIONS", comment: "Configure reactions title text")
         view.backgroundColor = .Signal.tertiaryGroupedBackground
@@ -52,17 +47,13 @@ public class EmojiReactionPickerConfigViewController: UIViewController {
         navigationItem.leftBarButtonItem = .button(
             title: OWSLocalizedString(
                 "RESET",
-                comment: "Configure reactions reset button text"
+                comment: "Configure reactions reset button text",
             ),
             style: .plain,
             action: { [weak self] in
                 self?.resetButtonTapped()
-            }
+            },
         )
-        if self.forceDarkTheme {
-            navigationController?.overrideUserInterfaceStyle = .dark
-            overrideUserInterfaceStyle = .dark
-        }
 
         // Reaction picker
         reactionPicker.delegate = self
@@ -107,7 +98,7 @@ extension EmojiReactionPickerConfigViewController: MessageReactionPickerDelegate
         }
 
         let picker = EmojiPickerSheet(message: nil, allowReactionConfiguration: false) { [weak self] emoji in
-            guard let self = self else { return }
+            guard let self else { return }
 
             guard let emojiString = emoji?.rawValue else {
                 self.reactionPicker.endReplaceAnimation()

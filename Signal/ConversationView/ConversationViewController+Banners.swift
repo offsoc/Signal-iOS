@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+import LibSignalClient
 import SignalServiceKit
 import SignalUI
-import LibSignalClient
 
 // MARK: - Banner Management
 
@@ -14,20 +14,6 @@ extension ConversationViewController {
     /// Checks if there are any banners that need to be displayed and shows them as necessary.
     public func ensureBannerState() {
         AssertIsOnMainThread()
-
-        let isFirstLoadOfPinnedMessage: Bool
-        if let bannerStackView {
-            isFirstLoadOfPinnedMessage = bannerStackView.arrangedSubviews.count(where: { pinnedMessageBanner(view: $0) != nil}) == 0
-        } else {
-            isFirstLoadOfPinnedMessage = true
-        }
-
-        // This method should be called rarely, so it's simplest to discard and
-        // rebuild the indicator view every time.
-        if let bannerStackView {
-            bannerStackView.removeFromSuperview()
-            self.bannerStackView = nil
-        }
 
         var banners = [UIView]()
 
@@ -57,8 +43,36 @@ extension ConversationViewController {
         }
 
         // Pinned Messages
+        var didAddPinnedMessage = false
         if let banner = createPinnedMessageBannerIfNecessary() {
             banners.append(banner)
+            didAddPinnedMessage = true
+        }
+
+        let hasPriorPinnedMessages: Bool
+        if let bannerStackView {
+            hasPriorPinnedMessages = bannerStackView.arrangedSubviews.contains(where: { pinnedMessageBanner(view: $0) != nil })
+        } else {
+            hasPriorPinnedMessages = false
+        }
+
+        if hasPriorPinnedMessages, !didAddPinnedMessage, let bannerStackView {
+            for banner in bannerStackView.arrangedSubviews {
+                if let pinnedMessageBanner = pinnedMessageBanner(view: banner) {
+                    pinnedMessageBanner.animateBannerFadeOut(completion: { _ in
+                        bannerStackView.removeFromSuperview()
+                        self.bannerStackView = nil
+                    })
+                    return
+                }
+            }
+        }
+
+        // This method should be called rarely, so it's simplest to discard and
+        // rebuild the indicator view every time.
+        if let bannerStackView {
+            bannerStackView.removeFromSuperview()
+            self.bannerStackView = nil
         }
 
         guard !banners.isEmpty else {
@@ -68,7 +82,7 @@ extension ConversationViewController {
             return
         }
 
-        let topMargin: CGFloat = if #available(iOS 26, *) { 2 } else { 8 }
+        let topMargin: CGFloat = if #available(iOS 26, *) { 0 } else { 8 }
         let hMargin = OWSTableViewController2.cellHInnerMargin
         let bannersView = UIStackView(arrangedSubviews: banners)
         bannersView.axis = .vertical
@@ -83,9 +97,8 @@ extension ConversationViewController {
             bannersView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             bannersView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
         ])
-        view.layoutSubviews()
 
-        if isFirstLoadOfPinnedMessage {
+        if !hasPriorPinnedMessages, didAddPinnedMessage {
             for banner in bannersView.arrangedSubviews {
                 if let pinnedMessageBanner = pinnedMessageBanner(view: banner) {
                     pinnedMessageBanner.animateBannerFadeIn()
@@ -100,9 +113,11 @@ extension ConversationViewController {
     }
 
     private func pinnedMessageBanner(view: UIView) -> ConversationBannerView? {
-        guard let banner = view as? ConversationBannerView,
-              let config = banner.contentView.configuration as? ConversationBannerView.ContentConfiguration,
-              config.isPinnedMessagesBanner else {
+        guard
+            let banner = view as? ConversationBannerView,
+            let config = banner.contentView.configuration as? ConversationBannerView.ContentConfiguration,
+            config.isPinnedMessagesBanner
+        else {
             return nil
         }
         return banner
@@ -112,15 +127,30 @@ extension ConversationViewController {
 // MARK: - Single class for all banners
 
 private class ConversationBannerView: UIView {
-    internal var contentView: UIView & UIContentView
-    private var blurBackgroundView: UIVisualEffectView?
+    var contentView: UIView & UIContentView
+    var blurBackgroundView: UIVisualEffectView?
 
-    public static func fadeInAnimator() -> UIViewPropertyAnimator {
+    static func fadeInAnimator() -> UIViewPropertyAnimator {
         return UIViewPropertyAnimator(
             duration: 0.35,
             springDamping: 1,
-            springResponse: 0.35
+            springResponse: 0.35,
         )
+    }
+
+    var pinnedMessageDelegate: PinnedMessageInteractionManagerDelegate? {
+        get {
+            guard let _contentView = contentView as? ConversationBannerContentView else {
+                return nil
+            }
+            return _contentView.pinnedMessageInteractionDelegate
+        }
+        set {
+            guard let _contentView = contentView as? ConversationBannerContentView else {
+                return
+            }
+            _contentView.pinnedMessageInteractionDelegate = newValue
+        }
     }
 
     /// Contains all the information necessary to construct any banner.
@@ -149,9 +179,6 @@ private class ConversationBannerView: UIView {
         /// Small view displayed at the leading edge of the banner.
         let leadingAccessoryView: UIView?
 
-        /// Small view displayed at the trailing edge of the banner.
-        let trailingAccessoryView: UIView?
-
         /// Action to perform when the entire banner is tapped.
         /// Banner will not be tappable if this is nil.
         var bannerTapAction: (() -> Void)?
@@ -168,6 +195,23 @@ private class ConversationBannerView: UIView {
     }
 
     private class ConversationBannerContentView: UIStackView, UIContentView {
+        private enum PinnedMessageConstants {
+            static let bannerHeight = 50.0
+            static let thumbnailSize = 30.0
+            static let spacing = 8.0
+            static let leadingPadding = 16.0
+
+            // Image is 30 px, total banner is 50, which leaves 10 on top&bottom
+            static let thumbnailPadding = 10.0
+
+            // The leading scroll accessory adds 10 px to the total size when present.
+            static let leadingAccessoryPadding = 10.0
+
+            // Buffer so the text doesn't overlap with the trailing pin button.
+            static let pinButtonTrailingPadding = 48.0
+        }
+
+        weak var pinnedMessageInteractionDelegate: PinnedMessageInteractionManagerDelegate?
 
         var configuration: any UIContentConfiguration {
             get { _configuration }
@@ -199,8 +243,74 @@ private class ConversationBannerView: UIView {
             rebuildContent()
         }
 
+        private func buildTitleLabel(text: String) -> UILabel {
+            let _titleLabel = UILabel()
+            _titleLabel.font = UIFont.dynamicTypeFootnoteClamped.semibold()
+            _titleLabel.textColor = .Signal.label
+            _titleLabel.numberOfLines = 1
+            _titleLabel.text = text
+            return _titleLabel
+        }
+
+        private func buildBodyLabel(text: NSAttributedString) -> UILabel {
+            let _bodyLabel = UILabel()
+            _bodyLabel.font = UIFont.dynamicTypeSubheadlineClamped
+            _bodyLabel.textColor = .Signal.label
+            _bodyLabel.numberOfLines = 1
+            _bodyLabel.attributedText = text
+            return _bodyLabel
+        }
+
+        func makeTextStackThumbnailContainer(
+            thumbnail: UIImageView?,
+            title: String,
+            body: NSAttributedString,
+            hasLeadingAccessory: Bool,
+        ) -> UIView {
+            let container = UIView()
+            let accessoryPadding = hasLeadingAccessory ? PinnedMessageConstants.leadingAccessoryPadding : 0.0
+            let textStackLeadingPadding: CGFloat
+            if let thumbnail {
+                container.addSubview(thumbnail)
+                thumbnail.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    thumbnail.topAnchor.constraint(equalTo: container.topAnchor, constant: PinnedMessageConstants.thumbnailPadding),
+                    thumbnail.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: PinnedMessageConstants.leadingPadding + accessoryPadding),
+                    thumbnail.widthAnchor.constraint(equalToConstant: PinnedMessageConstants.thumbnailSize),
+                ])
+                textStackLeadingPadding = PinnedMessageConstants.leadingPadding +
+                    accessoryPadding +
+                    PinnedMessageConstants.thumbnailSize +
+                    PinnedMessageConstants.spacing
+            } else {
+                textStackLeadingPadding = PinnedMessageConstants.leadingPadding + accessoryPadding
+            }
+
+            let _titleLabel = buildTitleLabel(text: title)
+            let _bodyLabel = buildBodyLabel(text: body)
+
+            let textStack = UIStackView(arrangedSubviews: [_titleLabel, _bodyLabel])
+            textStack.axis = .vertical
+            container.addSubview(textStack)
+
+            textStack.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                textStack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: textStackLeadingPadding),
+                textStack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+                textStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -PinnedMessageConstants.pinButtonTrailingPadding),
+            ])
+            textStack.isAccessibilityElement = true
+            let axLabelPrefix = OWSLocalizedString(
+                "PINNED_MESSAGE_BANNER_AX_LABEL",
+                comment: "Accessibility label prefix for banner showing a pinned message",
+            )
+            textStack.accessibilityLabel = axLabelPrefix + title + "," + body.string
+            textStack.accessibilityTraits = .button
+            return container
+        }
+
         private func rebuildContent() {
-            directionalLayoutMargins = NSDirectionalEdgeInsets(hMargin: 16, vMargin: 10)
+            directionalLayoutMargins = NSDirectionalEdgeInsets(hMargin: 16, vMargin: 6)
 
             removeAllSubviews()
 
@@ -219,45 +329,48 @@ private class ConversationBannerView: UIView {
                 addArrangedSubview(leadingAccessoryContainerView)
             }
 
-            if let _thumbnail = configuration.thumbnail {
-                thumbnail = _thumbnail
-                addArrangedSubview(_thumbnail)
-            }
+            if configuration.isPinnedMessagesBanner, let title = configuration.title {
+                // If this is a pinned message and its not first load (no previous title), animate the existing banner off screen.
+                if !titleLabel.text.isEmptyOrNil {
+                    animatePinnedMessageTransition(
+                        newTitle: title,
+                        newBody: configuration.body,
+                        newThumbnail: configuration.thumbnail,
+                    )
+                } else {
+                    // Otherwise build from scratch.
+                    let container = makeTextStackThumbnailContainer(
+                        thumbnail: configuration.thumbnail,
+                        title: title,
+                        body: configuration.body,
+                        hasLeadingAccessory: configuration.leadingAccessoryView != nil,
+                    )
 
-            // If this is a pinned message and its not first load (no previous title), animate.
-            if configuration.isPinnedMessagesBanner,
-               let title = configuration.title,
-               !titleLabel.text.isEmptyOrNil
-            {
-                animatePinnedMessageTransition(
-                    newTitle: title,
-                    newBody: configuration.body,
-                    newThumbnail: configuration.thumbnail
-                )
+                    // Store copies of old banner strings for the next animation.
+                    titleLabel = buildTitleLabel(text: title)
+                    bodyLabel = buildBodyLabel(text: configuration.body)
+
+                    addSubview(container)
+                    container.translatesAutoresizingMaskIntoConstraints = false
+                    NSLayoutConstraint.activate([
+                        container.leadingAnchor.constraint(equalTo: leadingAnchor),
+                        container.trailingAnchor.constraint(equalTo: trailingAnchor),
+                        container.topAnchor.constraint(equalTo: topAnchor),
+                        container.heightAnchor.constraint(equalToConstant: PinnedMessageConstants.bannerHeight),
+                    ])
+                }
             } else {
-                bodyLabel.numberOfLines = configuration.isPinnedMessagesBanner ? 1 : 0
+                bodyLabel = UILabel()
                 bodyLabel.font = UIFont.dynamicTypeSubheadlineClamped
                 bodyLabel.textColor = .Signal.label
+                bodyLabel.numberOfLines = 0
                 bodyLabel.attributedText = configuration.body
-
-                if let title = configuration.title {
-                    titleLabel.numberOfLines = configuration.isPinnedMessagesBanner ? 1 : 0
-                    titleLabel.font = UIFont.dynamicTypeFootnote.semibold()
-                    titleLabel.textColor = .Signal.label
-                    titleLabel.text = title
-
-                    textStackView.addArrangedSubviews([titleLabel, bodyLabel])
-                    textStackView.axis = .vertical
-                    textStackView.spacing = 2
-
-                    addArrangedSubview(textStackView)
-                } else {
-                    addArrangedSubview(bodyLabel)
-                }
+                addArrangedSubview(bodyLabel)
             }
 
-            if let viewButtonTitle = configuration.viewButtonTitle,
-               let viewButtonAction = configuration.viewButtonAction
+            if
+                let viewButtonTitle = configuration.viewButtonTitle,
+                let viewButtonAction = configuration.viewButtonAction
             {
                 let button = UIButton(configuration: .gray(), primaryAction: viewButtonAction)
                 button.configuration?.title = viewButtonTitle
@@ -293,7 +406,7 @@ private class ConversationBannerView: UIView {
                 button.configuration?.baseBackgroundColor = .Signal.secondaryFill
                 button.accessibilityLabel = OWSLocalizedString(
                     "BANNER_CLOSE_ACCESSIBILITY_LABEL",
-                    comment: "Accessibility label for banner close button"
+                    comment: "Accessibility label for banner close button",
                 )
                 button.setCompressionResistanceHigh()
                 button.setContentHuggingHigh()
@@ -312,17 +425,47 @@ private class ConversationBannerView: UIView {
                 directionalLayoutMargins.trailing = 4 // 10 total with button's content padding
             }
 
-            if let trailingAccessoryView = configuration.trailingAccessoryView {
-                let trailingAccessoryContainerView = UIView.container()
-                trailingAccessoryContainerView.addSubview(trailingAccessoryView)
-                trailingAccessoryView.translatesAutoresizingMaskIntoConstraints = false
+            if configuration.isPinnedMessagesBanner {
+                let button: UIButton
+                if #available(iOS 26.0, *) {
+                    button = UIButton(configuration: .clearGlass())
+                } else {
+                    button = UIButton(configuration: .plain())
+                }
+                button.configuration?.image = .pin
+                button.configuration?.cornerStyle = .capsule
+                button.configuration?.contentInsets = .init(margin: 6)
+                button.accessibilityLabel = OWSLocalizedString(
+                    "PINNED_MESSAGE_MENU_ACCESSIBILITY_LABEL",
+                    comment: "Accessibility label for pin message button",
+                )
+                button.setCompressionResistanceHigh()
+                button.setContentHuggingHigh()
+
+                button.menu = pinMessageMenu()
+                button.showsMenuAsPrimaryAction = true
+                button.tintColor = .Signal.label
+
+                let buttonContainer = UIView.container()
+                buttonContainer.addSubview(button)
+                button.translatesAutoresizingMaskIntoConstraints = false
                 NSLayoutConstraint.activate([
-                    trailingAccessoryView.topAnchor.constraint(greaterThanOrEqualTo: trailingAccessoryContainerView.topAnchor),
-                    trailingAccessoryView.centerYAnchor.constraint(equalTo: trailingAccessoryContainerView.centerYAnchor),
-                    trailingAccessoryView.leadingAnchor.constraint(equalTo: trailingAccessoryContainerView.leadingAnchor),
-                    trailingAccessoryView.trailingAnchor.constraint(equalTo: trailingAccessoryContainerView.trailingAnchor),
+                    button.topAnchor.constraint(greaterThanOrEqualTo: buttonContainer.topAnchor),
+                    button.centerYAnchor.constraint(equalTo: buttonContainer.centerYAnchor),
+                    button.leadingAnchor.constraint(equalTo: buttonContainer.leadingAnchor),
+                    button.trailingAnchor.constraint(equalTo: buttonContainer.trailingAnchor),
                 ])
-                addArrangedSubview(trailingAccessoryContainerView)
+                addSubview(buttonContainer)
+                buttonContainer.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    buttonContainer.centerYAnchor.constraint(equalTo: centerYAnchor),
+                    buttonContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+                ])
+
+                // Total banner height should always be 50 for pinned messages.
+                NSLayoutConstraint.activate([
+                    heightAnchor.constraint(equalToConstant: PinnedMessageConstants.bannerHeight),
+                ])
             }
 
             if configuration.bannerTapAction != nil {
@@ -330,101 +473,115 @@ private class ConversationBannerView: UIView {
             }
         }
 
-        private func animatePinnedMessageTransition(newTitle: String, newBody: NSAttributedString, newThumbnail: UIImageView?) {
-            func makeAnimatedStack(title: String?, body: NSAttributedString?, thumbnailImageView: UIImageView?) -> (UIStackView) {
-                let hStack = UIStackView()
-                hStack.axis = .horizontal
-                hStack.spacing = 12
+        private func pinMessageMenu() -> UIMenu {
+            var actions: [UIAction] = []
+            if BuildFlags.PinnedMessages.send {
+                actions.append(
+                    UIAction(
+                        title: OWSLocalizedString(
+                            "PINNED_MESSAGES_UNPIN",
+                            comment: "Action menu item to unpin a message",
+                        ),
+                        image: .pinSlash,
+                    ) { [weak self] _ in
+                        self?.pinnedMessageInteractionDelegate?.unpinMessage(message: nil, modalDelegate: nil)
+                    },
+                )
+            }
+            actions.append(
+                contentsOf: [
+                    UIAction(
+                        title: OWSLocalizedString(
+                            "PINNED_MESSAGES_GO_TO_MESSAGE",
+                            comment: "Action menu item to go to a message in the conversation view",
+                        ),
+                        image: .chatArrow,
+                    ) { [weak self] _ in
+                        self?.pinnedMessageInteractionDelegate?.goToMessage(message: nil)
+                    },
+                    UIAction(title: OWSLocalizedString(
+                        "PINNED_MESSAGES_SEE_ALL_MESSAGES",
+                        comment: "Action menu item to see all pinned messages",
+                    ), image: .listBullet) { [weak self] _ in
+                        self?.pinnedMessageInteractionDelegate?.presentSeeAllMessages()
+                    },
+                ])
+            return UIMenu(children: actions)
+        }
 
-                let _titleLabel = UILabel()
-                _titleLabel.numberOfLines = 1
-                _titleLabel.font = UIFont.dynamicTypeFootnote.semibold()
-                _titleLabel.textColor = .Signal.label
-                _titleLabel.text = title
-
-                let _bodyLabel = UILabel()
-                _bodyLabel.numberOfLines = 1
-                _bodyLabel.font = UIFont.dynamicTypeSubheadlineClamped
-                _bodyLabel.textColor = .Signal.label
-                _bodyLabel.attributedText = body
-
-                let newTextStack = UIStackView(arrangedSubviews: [_titleLabel, _bodyLabel])
-                newTextStack.axis = .vertical
-                newTextStack.spacing = 2
-
-                if let _thumbnail = thumbnailImageView {
-                    hStack.addArrangedSubview(_thumbnail)
-                }
-                hStack.addArrangedSubview(newTextStack)
-                return hStack
+        private func animatePinnedMessageTransition(
+            newTitle: String,
+            newBody: NSAttributedString,
+            newThumbnail: UIImageView?,
+        ) {
+            guard
+                let titleText = titleLabel.text,
+                let bodyText = bodyLabel.attributedText
+            else {
+                return
             }
 
-            let oldAnimatedStack = makeAnimatedStack(
-                title: titleLabel.text,
-                body: bodyLabel.attributedText,
-                thumbnailImageView: thumbnail
+            // Make container for old textStack
+            let oldContainer = makeTextStackThumbnailContainer(
+                thumbnail: thumbnail,
+                title: titleText,
+                body: bodyText,
+                hasLeadingAccessory: true,
             )
-            let newAnimatedStack = makeAnimatedStack(
+            addSubview(oldContainer)
+
+            oldContainer.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                oldContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
+                oldContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
+                oldContainer.topAnchor.constraint(equalTo: topAnchor),
+                oldContainer.heightAnchor.constraint(equalToConstant: PinnedMessageConstants.bannerHeight),
+            ])
+
+            // Build container for new textStack
+            let newContainer = makeTextStackThumbnailContainer(
+                thumbnail: newThumbnail,
                 title: newTitle,
                 body: newBody,
-                thumbnailImageView: newThumbnail
+                hasLeadingAccessory: true,
             )
+            addSubview(newContainer)
 
-            // Create a stack with:
-            // [old]
-            // [new]
-            // and insert it into a fixed-height wrapper (so the label thats sliding in/out gets cut off).
-            // Constrain the top of the stack (old pin) to the top of the wrapper and start it at (0,0),
-            // then animate it upwards off screen by a y value equal to its size, leaving the new pin in view.
-            let animatedStack = UIStackView(arrangedSubviews: [
-                oldAnimatedStack,
-                newAnimatedStack
-            ])
-            animatedStack.axis = .vertical
-
-            let fixedHeightAnimationView = UIView()
-            fixedHeightAnimationView.clipsToBounds = true
-            fixedHeightAnimationView.addSubview(animatedStack)
-
-            animatedStack.translatesAutoresizingMaskIntoConstraints = false
+            newContainer.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
-                animatedStack.leadingAnchor.constraint(equalTo: fixedHeightAnimationView.leadingAnchor),
-                animatedStack.trailingAnchor.constraint(equalTo: fixedHeightAnimationView.trailingAnchor),
-                animatedStack.topAnchor.constraint(equalTo: fixedHeightAnimationView.topAnchor),
+                newContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
+                newContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
+                newContainer.topAnchor.constraint(equalTo: topAnchor),
+                newContainer.heightAnchor.constraint(equalToConstant: PinnedMessageConstants.bannerHeight),
             ])
 
-            let textHeight = textStackView.bounds.height
-            addArrangedSubview(fixedHeightAnimationView)
-
-            fixedHeightAnimationView.heightAnchor.constraint(equalToConstant: textHeight).isActive = true
+            // Initial positions
+            oldContainer.transform = .identity
+            newContainer.transform = CGAffineTransform(translationX: 0, y: PinnedMessageConstants.bannerHeight)
 
             let pinAnimator = UIViewPropertyAnimator(
                 duration: 0.3,
                 springDamping: 1,
-                springResponse: 0.3
+                springResponse: 0.3,
             )
+
             pinAnimator.addAnimations {
-                animatedStack.transform = CGAffineTransform(translationX: 0, y: -textHeight)
+                oldContainer.transform = CGAffineTransform(translationX: 0, y: -PinnedMessageConstants.bannerHeight)
+                newContainer.transform = .identity
             }
 
-            pinAnimator.addCompletion { [self] _ in
+            pinAnimator.addCompletion { _ in
                 self.isAnimating = false
-                fixedHeightAnimationView.removeFromSuperview()
+                oldContainer.removeFromSuperview()
 
-                self.titleLabel.text = newTitle
-                self.bodyLabel.attributedText = newBody
+                // Store the new text & thumbnails so we can reference them
+                // as the "old" ones next time we animate.
+                self.titleLabel = self.buildTitleLabel(text: newTitle)
+                self.bodyLabel = self.buildBodyLabel(text: newBody)
                 self.thumbnail = newThumbnail
-
-                let textStackIndex: Int
-                if let _thumbnail = self.thumbnail {
-                    insertArrangedSubview(_thumbnail, at: 1)
-                    textStackIndex = 2
-                } else {
-                    textStackIndex = 1
-                }
-                insertArrangedSubview(textStackView, at: textStackIndex)
             }
-            self.isAnimating = true
+
+            isAnimating = true
             pinAnimator.startAnimation()
         }
 
@@ -506,14 +663,14 @@ private class ConversationBannerView: UIView {
         ])
     }
 
-    public func isAnimating() -> Bool {
+    func isAnimating() -> Bool {
         guard let bannerContentView = contentView as? ConversationBannerContentView else {
             return false
         }
         return bannerContentView.isAnimating
     }
 
-    public func animateBannerFadeIn() {
+    func animateBannerFadeIn() {
         guard let contentView = contentView as? ConversationBannerContentView else {
             return
         }
@@ -533,6 +690,32 @@ private class ConversationBannerView: UIView {
             contentView.titleLabel.alpha = 1
             contentView.thumbnail?.alpha = 1
         }
+
+        animator.startAnimation()
+    }
+
+    func animateBannerFadeOut(completion: @escaping (UIViewAnimatingPosition) -> Void) {
+        guard let contentView = contentView as? ConversationBannerContentView else {
+            return
+        }
+        let animator = ConversationBannerView.fadeInAnimator()
+        UIView.performWithoutAnimation {
+            if let backgroundViewEffect = self.backgroundViewVisualEffect() {
+                self.blurBackgroundView?.effect = backgroundViewEffect
+            }
+            contentView.bodyLabel.alpha = 1
+            contentView.titleLabel.alpha = 1
+            contentView.thumbnail?.alpha = 1
+        }
+
+        animator.addAnimations {
+            self.blurBackgroundView?.effect = nil
+            contentView.bodyLabel.alpha = 0
+            contentView.titleLabel.alpha = 0
+            contentView.thumbnail?.alpha = 0
+        }
+
+        animator.addCompletion(completion)
 
         animator.startAnimation()
     }
@@ -570,23 +753,24 @@ private extension ConversationViewController {
         let collisionFinder = ContactThreadNameCollisionFinder
             .makeToCheckMessageRequestNameCollisions(forContactThread: contactThread)
 
-        guard let (avatar1, avatar2) = SSKEnvironment.shared.databaseStorageRef.read(block: { tx -> (UIImage?, UIImage?)? in
-            guard
-                viewState.shouldShowMessageRequestNameCollisionBanner(transaction: tx),
-                let collision = collisionFinder.findCollisions(transaction: tx).first
-            else { return nil }
+        guard
+            let (avatar1, avatar2) = SSKEnvironment.shared.databaseStorageRef.read(block: { tx -> (UIImage?, UIImage?)? in
+                guard
+                    viewState.shouldShowMessageRequestNameCollisionBanner(transaction: tx),
+                    let collision = collisionFinder.findCollisions(transaction: tx).first
+                else { return nil }
 
-            return (
-                fetchAvatar(for: collision.elements[0].address, tx: tx),
-                fetchAvatar(for: collision.elements[1].address, tx: tx)
-            )
-        }) else { return nil }
+                return (
+                    fetchAvatar(for: collision.elements[0].address, tx: tx),
+                    fetchAvatar(for: collision.elements[1].address, tx: tx),
+                )
+            }) else { return nil }
 
         let bannerConfiguration = ConversationBannerView.ContentConfiguration(
             title: nil,
             body: OWSLocalizedString(
                 "MESSAGE_REQUEST_NAME_COLLISION_BANNER_LABEL",
-                comment: "Banner label notifying user that a new message is from a user with the same name as an existing contact"
+                comment: "Banner label notifying user that a new message is from a user with the same name as an existing contact",
             ).attributedString(),
             thumbnail: nil,
             viewButtonTitle: CommonStrings.viewButton,
@@ -603,8 +787,7 @@ private extension ConversationViewController {
                 self.ensureBannerState()
             },
             leadingAccessoryView: DoubleProfileImageView(primaryImage: avatar1, secondaryImage: avatar2),
-            trailingAccessoryView: nil,
-            isPinnedMessagesBanner: false
+            isPinnedMessagesBanner: false,
         )
 
         return ConversationBannerView(configuration: bannerConfiguration)
@@ -636,41 +819,42 @@ private extension ConversationViewController {
         }
 
         // Fetch the necessary info to build the banner
-        guard let (title, avatar1, avatar2) = SSKEnvironment.shared.databaseStorageRef.read(block: { readTx -> (String, UIImage?, UIImage?)? in
-            let collisionSets = collisionFinder.findCollisions(transaction: readTx)
-            guard !collisionSets.isEmpty else { return nil }
+        guard
+            let (title, avatar1, avatar2) = SSKEnvironment.shared.databaseStorageRef.read(block: { readTx -> (String, UIImage?, UIImage?)? in
+                let collisionSets = collisionFinder.findCollisions(transaction: readTx)
+                guard !collisionSets.isEmpty else { return nil }
 
-            let totalCollisionElementCount = collisionSets.reduce(0) { $0 + $1.elements.count }
+                let totalCollisionElementCount = collisionSets.reduce(0) { $0 + $1.elements.count }
 
-            let title: String
+                let title: String
 
-            if collisionSets.count > 1 {
-                let titleFormat = OWSLocalizedString(
-                    "GROUP_MEMBERSHIP_MULTIPLE_COLLISIONS_BANNER_TITLE_%d",
-                    tableName: "PluralAware",
-                    comment: "Banner title alerting user to a name collision set ub the group membership. Embeds {{ total number of colliding members }}"
+                if collisionSets.count > 1 {
+                    let titleFormat = OWSLocalizedString(
+                        "GROUP_MEMBERSHIP_MULTIPLE_COLLISIONS_BANNER_TITLE_%d",
+                        tableName: "PluralAware",
+                        comment: "Banner title alerting user to a name collision set ub the group membership. Embeds {{ total number of colliding members }}",
+                    )
+                    title = String.localizedStringWithFormat(titleFormat, collisionSets.count)
+                } else {
+                    let titleFormat = OWSLocalizedString(
+                        "GROUP_MEMBERSHIP_COLLISIONS_BANNER_TITLE_%d",
+                        tableName: "PluralAware",
+                        comment: "Banner title alerting user about multiple name collisions in group membership. Embeds {{ number of sets of colliding members }}",
+                    )
+                    title = String.localizedStringWithFormat(titleFormat, totalCollisionElementCount)
+                }
+
+                let avatar1 = fetchAvatar(
+                    for: collisionSets[0].elements[0].address,
+                    tx: readTx,
                 )
-                title = String.localizedStringWithFormat(titleFormat, collisionSets.count)
-            } else {
-                let titleFormat = OWSLocalizedString(
-                    "GROUP_MEMBERSHIP_COLLISIONS_BANNER_TITLE_%d",
-                    tableName: "PluralAware",
-                    comment: "Banner title alerting user about multiple name collisions in group membership. Embeds {{ number of sets of colliding members }}"
+                let avatar2 = fetchAvatar(
+                    for: collisionSets[0].elements[1].address,
+                    tx: readTx,
                 )
-                title = String.localizedStringWithFormat(titleFormat, totalCollisionElementCount)
-            }
+                return (title, avatar1, avatar2)
 
-            let avatar1 = fetchAvatar(
-                for: collisionSets[0].elements[0].address,
-                tx: readTx
-            )
-            let avatar2 = fetchAvatar(
-                for: collisionSets[0].elements[1].address,
-                tx: readTx
-            )
-            return (title, avatar1, avatar2)
-
-        }) else { return nil }
+            }) else { return nil }
 
         let bannerConfiguration = ConversationBannerView.ContentConfiguration(
             title: nil,
@@ -681,7 +865,7 @@ private extension ConversationViewController {
                 guard let self else { return }
                 let vc = NameCollisionResolutionViewController(
                     collisionFinder: collisionFinder,
-                    collisionDelegate: self
+                    collisionDelegate: self,
                 )
                 vc.present(fromViewController: self)
             },
@@ -693,12 +877,11 @@ private extension ConversationViewController {
                     },
                     completion: {
                         self.ensureBannerState()
-                    }
+                    },
                 )
             },
             leadingAccessoryView: DoubleProfileImageView(primaryImage: avatar1, secondaryImage: avatar2),
-            trailingAccessoryView: nil,
-            isPinnedMessagesBanner: false
+            isPinnedMessagesBanner: false,
         )
 
         return ConversationBannerView(configuration: bannerConfiguration)
@@ -709,7 +892,7 @@ private extension ConversationViewController {
             forAddress: address,
             diameterPoints: 24,
             localUserDisplayMode: .asUser,
-            transaction: tx
+            transaction: tx,
         )
     }
 
@@ -734,11 +917,11 @@ private extension ConversationViewController {
             let hasSecondaryImage = (secondaryImage != nil)
             let top = primaryImageView.topAnchor.constraint(
                 equalTo: topAnchor,
-                constant: hasSecondaryImage ? 12 : 0
+                constant: hasSecondaryImage ? 12 : 0,
             )
             let leading = primaryImageView.leadingAnchor.constraint(
                 equalTo: leadingAnchor,
-                constant: hasSecondaryImage ? 16 : 4
+                constant: hasSecondaryImage ? 16 : 4,
             )
             NSLayoutConstraint.activate([
                 // Image sizes.
@@ -792,10 +975,10 @@ private extension ConversationViewController {
                     ovalIn: CGRect(
                         origin: CGPoint(
                             x: bounds.center.x - borderSize,
-                            y: bounds.center.y - borderSize
+                            y: bounds.center.y - borderSize,
                         ),
-                        size: bounds.size.plus(.square(borderSize * 2))
-                    )
+                        size: bounds.size.plus(.square(borderSize * 2)),
+                    ),
                 )
 
                 let maskPath = UIBezierPath(rect: bounds)
@@ -817,27 +1000,30 @@ private extension ConversationViewController {
 private extension ConversationViewController {
 
     func createPendingJoinRequestBanner(viewState: CVViewState) -> ConversationBannerView? {
-        guard let pendingMemberRequests = pendingMemberRequests,
-              !pendingMemberRequests.isEmpty,
-              canApprovePendingMemberRequests
+        guard
+            let pendingMemberRequests,
+            !pendingMemberRequests.isEmpty,
+            canApprovePendingMemberRequests
         else {
             return nil
         }
 
         // We will skip this read if the above checks fail, which will be most of the time.
-        guard SSKEnvironment.shared.databaseStorageRef.read(block: { tx in
-            viewState.shouldShowPendingMemberRequestsBanner(
-                currentPendingMembers: pendingMemberRequests,
-                transaction: tx
-            )
-        }) else {
+        guard
+            SSKEnvironment.shared.databaseStorageRef.read(block: { tx in
+                viewState.shouldShowPendingMemberRequestsBanner(
+                    currentPendingMembers: pendingMemberRequests,
+                    transaction: tx,
+                )
+            })
+        else {
             return nil
         }
 
         let format = OWSLocalizedString(
             "PENDING_GROUP_MEMBERS_REQUEST_BANNER_%d",
             tableName: "PluralAware",
-            comment: "Format for banner indicating that there are pending member requests to join the group. Embeds {{ the number of pending member requests }}."
+            comment: "Format for banner indicating that there are pending member requests to join the group. Embeds {{ the number of pending member requests }}.",
         )
 
         let bannerConfiguration = ConversationBannerView.ContentConfiguration(
@@ -852,7 +1038,7 @@ private extension ConversationViewController {
                 SSKEnvironment.shared.databaseStorageRef.write { transaction in
                     viewState.hidePendingMemberRequestsBanner(
                         currentPendingMembers: pendingMemberRequests,
-                        transaction: transaction
+                        transaction: transaction,
                     )
                 }
 
@@ -865,8 +1051,7 @@ private extension ConversationViewController {
                 imageView.setCompressionResistanceHigh()
                 return imageView
             }(),
-            trailingAccessoryView: nil,
-            isPinnedMessagesBanner: false
+            isPinnedMessagesBanner: false,
         )
         return ConversationBannerView(configuration: bannerConfiguration)
     }
@@ -900,16 +1085,20 @@ private extension ConversationViewController {
                 tx in SSKEnvironment.shared.contactManagerRef.displayName(for: address, tx: tx).resolvedValue()
             }
             let format = isGroupConversation
-            ? OWSLocalizedString("MESSAGES_VIEW_1_MEMBER_NO_LONGER_VERIFIED_FORMAT",
-                                 comment: "Indicates that one member of this group conversation is no longer verified. Embeds {{user's name or phone number}}.")
-            : OWSLocalizedString("MESSAGES_VIEW_CONTACT_NO_LONGER_VERIFIED_FORMAT",
-                                 comment: "Indicates that this 1:1 conversation is no longer verified. Embeds {{user's name or phone number}}.")
+                ? OWSLocalizedString(
+                    "MESSAGES_VIEW_1_MEMBER_NO_LONGER_VERIFIED_FORMAT",
+                    comment: "Indicates that one member of this group conversation is no longer verified. Embeds {{user's name or phone number}}.",
+                )
+                : OWSLocalizedString(
+                    "MESSAGES_VIEW_CONTACT_NO_LONGER_VERIFIED_FORMAT",
+                    comment: "Indicates that this 1:1 conversation is no longer verified. Embeds {{user's name or phone number}}.",
+                )
             title = String(format: format, displayName)
 
         default:
             title = OWSLocalizedString(
                 "MESSAGES_VIEW_N_MEMBERS_NO_LONGER_VERIFIED",
-                comment: "Indicates that more than one member of this group conversation is no longer verified."
+                comment: "Indicates that more than one member of this group conversation is no longer verified.",
             )
         }
 
@@ -931,8 +1120,7 @@ private extension ConversationViewController {
                 imageView.setCompressionResistanceHigh()
                 return imageView
             }(),
-            trailingAccessoryView: nil,
-            isPinnedMessagesBanner: false
+            isPinnedMessagesBanner: false,
         )
 
         return ConversationBannerView(configuration: bannerConfiguration)
@@ -948,12 +1136,12 @@ private extension ConversationViewController {
         case 1:
             title = OWSLocalizedString(
                 "VERIFY_PRIVACY",
-                comment: "Label for button or row which allows users to verify the safety number of another user."
+                comment: "Label for button or row which allows users to verify the safety number of another user.",
             )
         default:
             title = OWSLocalizedString(
                 "VERIFY_PRIVACY_MULTIPLE",
-                comment: "Label for button or row which allows users to verify the safety numbers of multiple users."
+                comment: "Label for button or row which allows users to verify the safety numbers of multiple users.",
             )
         }
 
@@ -965,7 +1153,7 @@ private extension ConversationViewController {
 
         actionSheet.addAction(ActionSheetAction(
             title: CommonStrings.dismissButton,
-            style: .cancel
+            style: .cancel,
         ) { [weak self] _ in
             self?.resetVerificationStateToDefault(noLongerVerifiedIdentityKeys: noLongerVerifiedIdentityKeys)
         })
@@ -977,10 +1165,12 @@ private extension ConversationViewController {
 
 // MARK: - Pinned Messages
 
-internal extension ConversationViewController {
+extension ConversationViewController {
     func animateToNextPinnedMessage() {
-        guard let nextPinnedMessage = createPinnedMessageBannerIfNecessary(),
-        let priorPinnedMessage = bannerStackView?.arrangedSubviews.last as? ConversationBannerView else {
+        guard
+            let nextPinnedMessage = createPinnedMessageBannerIfNecessary(),
+            let priorPinnedMessage = bannerStackView?.arrangedSubviews.last as? ConversationBannerView
+        else {
             return
         }
         priorPinnedMessage.contentView.configuration = nextPinnedMessage.contentView.configuration
@@ -988,9 +1178,11 @@ internal extension ConversationViewController {
 
     /// Displays the first pinned message, sorted by most recently pinned.
     /// When tapped, it cycles to the next pinned message if one exists.
-    fileprivate func createPinnedMessageBannerIfNecessary() -> ConversationBannerView? {
-        guard threadViewModel.pinnedMessages.indices.contains(pinnedMessageIndex),
-              let pinnedMessageData = pinnedMessageData(for: threadViewModel.pinnedMessages[pinnedMessageIndex]) else {
+    private func createPinnedMessageBannerIfNecessary() -> ConversationBannerView? {
+        guard
+            threadViewModel.pinnedMessages.indices.contains(pinnedMessageIndex),
+            let pinnedMessageData = pinnedMessageData(for: threadViewModel.pinnedMessages[pinnedMessageIndex])
+        else {
             return nil
         }
 
@@ -1002,13 +1194,6 @@ internal extension ConversationViewController {
             viewButtonAction: nil,
             dismissButtonAction: nil,
             leadingAccessoryView: pinnedMessageLeadingAccessoryView(),
-            trailingAccessoryView: {
-                let imageView = UIImageView(image: UIImage(named: "pin"))
-                imageView.tintColor = .Signal.label
-                imageView.setContentHuggingHigh()
-                imageView.setCompressionResistanceHigh()
-                return imageView
-            }(),
             bannerTapAction: { [weak self] in
                 guard let priorPinnedMessage = self?.bannerStackView?.arrangedSubviews.last as? ConversationBannerView else {
                     return
@@ -1018,12 +1203,16 @@ internal extension ConversationViewController {
                     self?.handleTappedPinnedMessage()
                 }
             },
-            isPinnedMessagesBanner: true
+            isPinnedMessagesBanner: true,
         )
 
         let banner = ConversationBannerView(configuration: bannerConfiguration)
+
         let longPressInteraction = UIContextMenuInteraction(delegate: self)
-        banner.addInteraction(longPressInteraction)
+        banner.blurBackgroundView?.addInteraction(longPressInteraction)
+
+        // Set up interaction delegate for pin icon menu
+        banner.pinnedMessageDelegate = self
 
         return banner
     }

@@ -13,13 +13,13 @@ extension AttachmentReference.ConstructionParams {
         owner: AttachmentReference.Owner,
         sourceFilename: String? = UUID().uuidString,
         sourceUnencryptedByteCount: UInt32? = .random(in: 0...100),
-        sourceMediaSizePixels: CGSize? = CGSize(width: .random(in: 0...100), height: .random(in: 0...100))
+        sourceMediaSizePixels: CGSize? = CGSize(width: .random(in: 0...100), height: .random(in: 0...100)),
     ) -> AttachmentReference.ConstructionParams {
         return AttachmentReference.ConstructionParams(
             owner: owner,
             sourceFilename: sourceFilename,
             sourceUnencryptedByteCount: sourceUnencryptedByteCount,
-            sourceMediaSizePixels: sourceMediaSizePixels
+            sourceMediaSizePixels: sourceMediaSizePixels,
         )
     }
 
@@ -32,11 +32,11 @@ extension AttachmentReference.ConstructionParams {
         renderingFlag: AttachmentReference.RenderingFlag = .default,
         isViewOnce: Bool = false,
         isPastEditRevision: Bool = false,
-        orderInOwner: UInt32 = 0,
+        orderInMessage: UInt32 = 0,
         idInOwner: UUID? = nil,
         sourceFilename: String? = UUID().uuidString,
         sourceUnencryptedByteCount: UInt32? = .random(in: 0...100),
-        sourceMediaSizePixels: CGSize? = CGSize(width: .random(in: 0...100), height: .random(in: 0...100))
+        sourceMediaSizePixels: CGSize? = CGSize(width: .random(in: 0...100), height: .random(in: 0...100)),
     ) -> AttachmentReference.ConstructionParams {
         return .mock(
             owner: .message(.bodyAttachment(.init(
@@ -47,13 +47,13 @@ extension AttachmentReference.ConstructionParams {
                 isPastEditRevision: isPastEditRevision,
                 caption: caption,
                 renderingFlag: renderingFlag,
-                orderInOwner: orderInOwner,
+                orderInMessage: orderInMessage,
                 idInOwner: idInOwner,
-                isViewOnce: isViewOnce
+                isViewOnce: isViewOnce,
             ))),
             sourceFilename: sourceFilename,
             sourceUnencryptedByteCount: sourceUnencryptedByteCount,
-            sourceMediaSizePixels: sourceMediaSizePixels
+            sourceMediaSizePixels: sourceMediaSizePixels,
         )
     }
 }

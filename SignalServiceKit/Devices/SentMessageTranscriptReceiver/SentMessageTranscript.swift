@@ -29,23 +29,12 @@ public enum SentMessageTranscriptType {
 
         public let attachmentPointerProtos: [SSKProtoAttachmentPointer]
 
-        /// Construction of the builder itself deferred since the builder's constructor does database inserts.
-        /// Edit messages construct a transcript but don't use the attachment builders and instead make their own.
-        public let makeQuotedMessageBuilder: (DBWriteTransaction) throws -> OwnedAttachmentBuilder<TSQuotedMessage>?
-
-        /// Construction of the builder itself deferred since the builder's constructor does database inserts.
-        /// Edit messages construct a transcript but don't use the attachment builders and instead make their own.
-        public let makeContactBuilder: (DBWriteTransaction) throws -> OwnedAttachmentBuilder<OWSContact>?
-
-        /// Construction of the builder itself deferred since the builder's constructor does database inserts.
-        /// Edit messages construct a transcript but don't use the attachment builders and instead make their own.
-        public let makeLinkPreviewBuilder: (DBWriteTransaction) throws -> OwnedAttachmentBuilder<OWSLinkPreview>?
-
+        public let validatedContactShare: ValidatedContactShareProto?
+        public let validatedQuotedReply: ValidatedQuotedReply?
+        public let validatedLinkPreview: ValidatedLinkPreviewProto?
+        public let validatedMessageSticker: ValidatedMessageStickerProto?
+        public let validatedPollCreate: ValidatedIncomingPollCreate?
         public let giftBadge: OWSGiftBadge?
-
-        /// Construction of the builder itself deferred since the builder's constructor does database inserts.
-        /// Edit messages construct a transcript but don't use the attachment builders and instead make their own.
-        public let makeMessageStickerBuilder: (DBWriteTransaction) throws -> OwnedAttachmentBuilder<MessageSticker>?
 
         public let isViewOnceMessage: Bool
 
@@ -55,8 +44,6 @@ public enum SentMessageTranscriptType {
 
         public let storyTimestamp: UInt64?
         public let storyAuthorAci: Aci?
-
-        public let makePollCreateBuilder: ((Int64, DBWriteTransaction) throws -> Void)?
     }
 
     public struct PaymentNotification {

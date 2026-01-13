@@ -124,9 +124,9 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
     public func fileAttachment(tx: DBReadTransaction) -> ReferencedAttachment? {
         guard let id else { return nil }
         return DependenciesBridge.shared.attachmentStore
-            .fetchFirstReferencedAttachment(
+            .fetchAnyReferencedAttachment(
                 for: .storyMessageMedia(storyMessageRowId: id),
-                tx: tx
+                tx: tx,
             )
     }
 
@@ -136,13 +136,13 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
 
     public var context: StoryContext { groupId.map { .groupId($0) } ?? .authorAci(authorAci) }
 
-    private init(
+    public init(
         timestamp: UInt64,
         authorAci: Aci,
         groupId: Data?,
         manifest: StoryManifest,
         attachment: StoryMessageAttachment,
-        replyCount: UInt64
+        replyCount: UInt64,
     ) {
         self.uniqueId = UUID().uuidString
         self.timestamp = timestamp
@@ -159,50 +159,13 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
         self.replyCount = replyCount
     }
 
-    public static func createAndInsert(
-        timestamp: UInt64,
-        authorAci: Aci,
-        groupId: Data?,
-        manifest: StoryManifest,
-        replyCount: UInt64,
-        attachmentBuilder: OwnedAttachmentBuilder<StoryMessageAttachment>,
-        mediaCaption: StyleOnlyMessageBody?,
-        shouldLoop: Bool,
-        transaction: DBWriteTransaction
-    ) throws -> StoryMessage {
-        let storyMessage = StoryMessage(
-            timestamp: timestamp,
-            authorAci: authorAci,
-            groupId: groupId,
-            manifest: manifest,
-            attachment: attachmentBuilder.info,
-            replyCount: replyCount
-        )
-        storyMessage.anyInsert(transaction: transaction)
-        guard let id = storyMessage.id else {
-            throw OWSAssertionError("No sqlite id after insert!")
-        }
-        let ownerId: AttachmentReference.OwnerBuilder
-        switch attachmentBuilder.info {
-        case .media:
-            ownerId = .storyMessageMedia(.init(
-                storyMessageRowId: id,
-                caption: mediaCaption
-            ))
-        case .text:
-            ownerId = .storyMessageLinkPreview(storyMessageRowId: id)
-        }
-        try attachmentBuilder.finalize(owner: ownerId, tx: transaction)
-        return storyMessage
-    }
-
     @discardableResult
     public static func create(
         withIncomingStoryMessage storyMessage: SSKProtoStoryMessage,
         timestamp: UInt64,
         receivedTimestamp: UInt64,
         author: Aci,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) throws -> StoryMessage? {
         Logger.info("Processing StoryMessage from \(author) with timestamp \(timestamp)")
 
@@ -214,7 +177,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
             groupId = nil
         }
 
-        if let groupId = groupId, SSKEnvironment.shared.blockingManagerRef.isGroupIdBlocked(groupId, transaction: transaction) {
+        if let groupId, SSKEnvironment.shared.blockingManagerRef.isGroupIdBlocked(groupId, transaction: transaction) {
             Logger.warn("Ignoring StoryMessage in blocked group.")
             return nil
         } else {
@@ -230,43 +193,46 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
 
         let manifest = StoryManifest.incoming(receivedState: .init(
             allowsReplies: storyMessage.allowsReplies,
-            receivedTimestamp: receivedTimestamp
+            receivedTimestamp: receivedTimestamp,
         ))
 
         let caption = storyMessage.fileAttachment?.caption.map { caption in
             return StyleOnlyMessageBody(text: caption, protos: storyMessage.bodyRanges)
         }
 
-        let attachment: StoryMessageAttachment
-        let mediaAttachmentBuilder: OwnedAttachmentBuilder<Void>?
-        let linkPreviewBuilder: OwnedAttachmentBuilder<OWSLinkPreview>?
+        let attachmentManager = DependenciesBridge.shared.attachmentManager
+        let linkPreviewManager = DependenciesBridge.shared.linkPreviewManager
 
+        let validatedLinkPreview: ValidatedLinkPreviewProto?
+        let mediaAttachmentProto: SSKProtoAttachmentPointer?
+        let attachment: StoryMessageAttachment
         if let fileAttachment = storyMessage.fileAttachment {
-            let attachmentBuilder = try DependenciesBridge.shared.attachmentManager.createAttachmentPointerBuilder(
-                from: fileAttachment,
-                tx: transaction
-            )
+            validatedLinkPreview = nil
+            mediaAttachmentProto = fileAttachment
             attachment = .media
-            mediaAttachmentBuilder = attachmentBuilder
-            linkPreviewBuilder = nil
         } else if let textAttachmentProto = storyMessage.textAttachment {
-            linkPreviewBuilder = textAttachmentProto.preview.flatMap {
+            if let linkPreviewProto = textAttachmentProto.preview {
                 do {
-                    return try DependenciesBridge.shared.linkPreviewManager.validateAndBuildStoryLinkPreview(
-                        from: $0,
-                        tx: transaction
+                    validatedLinkPreview = try linkPreviewManager.validateAndBuildStoryLinkPreview(
+                        from: linkPreviewProto,
                     )
+                } catch LinkPreviewError.invalidPreview {
+                    // Just drop the link preview, but keep the message
+                    Logger.warn("Dropping invalid link preview; keeping story")
+                    validatedLinkPreview = nil
                 } catch {
-                    Logger.error("Unable to build link preview!")
+                    owsFailDebug("Unexpected error for incoming story link preview proto! \(error)")
                     return nil
                 }
+            } else {
+                validatedLinkPreview = nil
             }
-            mediaAttachmentBuilder = nil
+            mediaAttachmentProto = nil
             attachment = .text(try TextAttachment(
                 from: textAttachmentProto,
                 bodyRanges: storyMessage.bodyRanges,
-                linkPreview: linkPreviewBuilder?.info,
-                transaction: transaction
+                linkPreview: validatedLinkPreview?.preview,
+                transaction: transaction,
             ))
         } else {
             throw OWSAssertionError("Missing attachment for StoryMessage.")
@@ -278,7 +244,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
             authorAci: author,
             timestamp: timestamp,
             isGroupStory: groupId != nil,
-            transaction
+            transaction,
         )
 
         let record = StoryMessage(
@@ -287,24 +253,35 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
             groupId: groupId?.serialize(),
             manifest: manifest,
             attachment: attachment,
-            replyCount: replyCount
+            replyCount: replyCount,
         )
         record.anyInsert(transaction: transaction)
 
         // Nil associated datas are for outgoing contexts, where we don't need to keep track of received timestamp.
         record.context.associatedData(transaction: transaction)?.update(lastReceivedTimestamp: timestamp, transaction: transaction)
 
-        try linkPreviewBuilder?.finalize(
-            owner: .storyMessageLinkPreview(storyMessageRowId: record.id!),
-            tx: transaction
-        )
-        try mediaAttachmentBuilder?.finalize(
-            owner: .storyMessageMedia(.init(
-                storyMessageRowId: record.id!,
-                caption: caption
-            )),
-            tx: transaction
-        )
+        if let linkPreviewImageProto = validatedLinkPreview?.imageProto {
+            try attachmentManager.createAttachmentPointer(
+                from: OwnedAttachmentPointerProto(
+                    proto: linkPreviewImageProto,
+                    owner: .storyMessageLinkPreview(storyMessageRowId: record.id!),
+                ),
+                tx: transaction,
+            )
+        }
+
+        if let mediaAttachmentProto {
+            try attachmentManager.createAttachmentPointer(
+                from: OwnedAttachmentPointerProto(
+                    proto: mediaAttachmentProto,
+                    owner: .storyMessageMedia(.init(
+                        storyMessageRowId: record.id!,
+                        caption: caption,
+                    )),
+                ),
+                tx: transaction,
+            )
+        }
 
         return record
     }
@@ -312,7 +289,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
     @discardableResult
     public static func create(
         withSentTranscript proto: SSKProtoSyncMessageSent,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) throws -> StoryMessage {
         Logger.info("Processing StoryMessage from transcript with timestamp \(proto.timestamp)")
 
@@ -329,10 +306,12 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
         }
 
         let manifest = StoryManifest.outgoing(recipientStates: Dictionary(uniqueKeysWithValues: try proto.storyMessageRecipients.map { recipient in
-            guard let serviceId = ServiceId.parseFrom(
-                serviceIdBinary: recipient.destinationServiceIDBinary,
-                serviceIdString: recipient.destinationServiceID,
-            ) else {
+            guard
+                let serviceId = ServiceId.parseFrom(
+                    serviceIdBinary: recipient.destinationServiceIDBinary,
+                    serviceIdString: recipient.destinationServiceID,
+                )
+            else {
                 throw OWSAssertionError("Invalid ServiceId on story recipient")
             }
 
@@ -341,8 +320,8 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
                 value: StoryRecipientState(
                     allowsReplies: recipient.isAllowedToReply,
                     contexts: recipient.distributionListIds.compactMap { UUID(uuidString: $0) },
-                    sendingState: .sent // This was sent by our linked device
-                )
+                    sendingState: .sent, // This was sent by our linked device
+                ),
             )
         }))
 
@@ -350,36 +329,35 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
             return StyleOnlyMessageBody(text: caption, protos: storyMessage.bodyRanges)
         }
 
-        let attachment: StoryMessageAttachment
-        let mediaAttachmentBuilder: OwnedAttachmentBuilder<Void>?
-        let linkPreviewBuilder: OwnedAttachmentBuilder<OWSLinkPreview>?
+        let attachmentManager = DependenciesBridge.shared.attachmentManager
+        let linkPreviewManager = DependenciesBridge.shared.linkPreviewManager
 
+        let validatedLinkPreview: ValidatedLinkPreviewProto?
+        let mediaAttachmentProto: SSKProtoAttachmentPointer?
+        let attachment: StoryMessageAttachment
         if let fileAttachment = storyMessage.fileAttachment {
-            let attachmentBuilder = try DependenciesBridge.shared.attachmentManager.createAttachmentPointerBuilder(
-                from: fileAttachment,
-                tx: transaction
-            )
+            validatedLinkPreview = nil
+            mediaAttachmentProto = fileAttachment
             attachment = .media
-            mediaAttachmentBuilder = attachmentBuilder
-            linkPreviewBuilder = nil
         } else if let textAttachmentProto = storyMessage.textAttachment {
-            linkPreviewBuilder = textAttachmentProto.preview.flatMap {
+            if let linkPreviewProto = textAttachmentProto.preview {
                 do {
-                    return try DependenciesBridge.shared.linkPreviewManager.validateAndBuildStoryLinkPreview(
-                        from: $0,
-                        tx: transaction
+                    validatedLinkPreview = try linkPreviewManager.validateAndBuildStoryLinkPreview(
+                        from: linkPreviewProto,
                     )
                 } catch {
-                    Logger.error("Unable to build link preview!")
-                    return nil
+                    Logger.error("Failed to validate and build link preview! \(error)")
+                    validatedLinkPreview = nil
                 }
+            } else {
+                validatedLinkPreview = nil
             }
-            mediaAttachmentBuilder = nil
+            mediaAttachmentProto = nil
             attachment = .text(try TextAttachment(
                 from: textAttachmentProto,
                 bodyRanges: storyMessage.bodyRanges,
-                linkPreview: linkPreviewBuilder?.info,
-                transaction: transaction
+                linkPreview: validatedLinkPreview?.preview,
+                transaction: transaction,
             ))
         } else {
             throw OWSAssertionError("Missing attachment for StoryMessage.")
@@ -393,7 +371,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
             authorAci: authorAci,
             timestamp: proto.timestamp,
             isGroupStory: groupId != nil,
-            transaction
+            transaction,
         )
 
         let record = StoryMessage(
@@ -402,7 +380,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
             groupId: groupId?.serialize(),
             manifest: manifest,
             attachment: attachment,
-            replyCount: replyCount
+            replyCount: replyCount,
         )
         record.anyInsert(transaction: transaction)
 
@@ -415,17 +393,28 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
             }
         }
 
-        try linkPreviewBuilder?.finalize(
-            owner: .storyMessageLinkPreview(storyMessageRowId: record.id!),
-            tx: transaction
-        )
-        try mediaAttachmentBuilder?.finalize(
-            owner: .storyMessageMedia(.init(
-                storyMessageRowId: record.id!,
-                caption: caption
-            )),
-            tx: transaction
-        )
+        if let linkPreviewImageProto = validatedLinkPreview?.imageProto {
+            try attachmentManager.createAttachmentPointer(
+                from: OwnedAttachmentPointerProto(
+                    proto: linkPreviewImageProto,
+                    owner: .storyMessageLinkPreview(storyMessageRowId: record.id!),
+                ),
+                tx: transaction,
+            )
+        }
+
+        if let mediaAttachmentProto {
+            try attachmentManager.createAttachmentPointer(
+                from: OwnedAttachmentPointerProto(
+                    proto: mediaAttachmentProto,
+                    owner: .storyMessageMedia(.init(
+                        storyMessageRowId: record.id!,
+                        caption: caption,
+                    )),
+                ),
+                tx: transaction,
+            )
+        }
 
         return record
     }
@@ -438,7 +427,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
     public static func createFromSystemAuthor(
         attachmentSource: AttachmentDataSource,
         timestamp: UInt64,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) throws -> StoryMessage {
         Logger.info("Processing StoryMessage for system author")
 
@@ -447,17 +436,12 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
                 allowsReplies: false,
                 receivedTimestamp: timestamp,
                 readTimestamp: nil,
-                viewedTimestamp: nil
-            )
+                viewedTimestamp: nil,
+            ),
         )
 
         // If someday a system story caption has styles, they'd go here.
         let caption: StyleOnlyMessageBody? = nil
-
-        let attachmentBuilder = try DependenciesBridge.shared.attachmentManager.createAttachmentStreamBuilder(
-            from: attachmentSource,
-            tx: transaction
-        )
 
         let record = StoryMessage(
             // NOTE: As of now these only get created for the onboarding story, and that happens
@@ -469,16 +453,20 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
             groupId: nil,
             manifest: manifest,
             attachment: .media,
-            replyCount: 0
+            replyCount: 0,
         )
         record.anyInsert(transaction: transaction)
 
-        try attachmentBuilder.finalize(
-            owner: .storyMessageMedia(.init(
-                storyMessageRowId: record.id!,
-                caption: caption
-            )),
-            tx: transaction
+        let attachmentManager = DependenciesBridge.shared.attachmentManager
+        try attachmentManager.createAttachmentStream(
+            from: OwnedAttachmentDataSource(
+                dataSource: attachmentSource,
+                owner: .storyMessageMedia(.init(
+                    storyMessageRowId: record.id!,
+                    caption: caption,
+                )),
+            ),
+            tx: transaction,
         )
 
         return record
@@ -504,7 +492,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
                 allowsReplies: receivedState.allowsReplies,
                 receivedTimestamp: receivedState.receivedTimestamp,
                 readTimestamp: timestamp,
-                viewedTimestamp: receivedState.viewedTimestamp
+                viewedTimestamp: receivedState.viewedTimestamp,
             ))
         }
 
@@ -540,7 +528,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
                 allowsReplies: receivedState.allowsReplies,
                 receivedTimestamp: receivedState.receivedTimestamp,
                 readTimestamp: receivedState.readTimestamp,
-                viewedTimestamp: timestamp
+                viewedTimestamp: timestamp,
             ))
         }
 
@@ -603,7 +591,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
         authorAci: Aci,
         timestamp: UInt64,
         isGroupStory: Bool,
-        _ tx: DBReadTransaction
+        _ tx: DBReadTransaction,
     ) -> UInt64 {
         if authorAci == StoryMessage.systemStoryAuthor {
             // No replies on system stories.
@@ -611,18 +599,20 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
         }
         do {
             let sql: String = """
-                SELECT COUNT(*)
-                FROM \(InteractionRecord.databaseTableName)
-                \(DEBUG_INDEXED_BY("Interaction_storyReply_partial", or: "index_model_TSInteraction_on_StoryContext"))
-                WHERE \(interactionColumn: .storyTimestamp) = ?
-                AND \(interactionColumn: .storyAuthorUuidString) = ?
-                AND \(interactionColumn: .isGroupStoryReply) = ?
-                """
-            guard let count = try UInt64.fetchOne(
-                tx.database,
-                sql: sql,
-                arguments: [timestamp, authorAci.serviceIdUppercaseString, isGroupStory]
-            ) else {
+            SELECT COUNT(*)
+            FROM \(InteractionRecord.databaseTableName)
+            \(DEBUG_INDEXED_BY("Interaction_storyReply_partial", or: "index_model_TSInteraction_on_StoryContext"))
+            WHERE \(interactionColumn: .storyTimestamp) = ?
+            AND \(interactionColumn: .storyAuthorUuidString) = ?
+            AND \(interactionColumn: .isGroupStoryReply) = ?
+            """
+            guard
+                let count = try UInt64.fetchOne(
+                    tx.database,
+                    sql: sql,
+                    arguments: [timestamp, authorAci.serviceIdUppercaseString, isGroupStory],
+                )
+            else {
                 throw OWSAssertionError("count was unexpectedly nil")
             }
             return count
@@ -642,10 +632,12 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
             var newRecipientStates = [ServiceId: StoryRecipientState]()
 
             for recipient in recipients {
-                guard let serviceId = ServiceId.parseFrom(
-                    serviceIdBinary: recipient.destinationServiceIDBinary,
-                    serviceIdString: recipient.destinationServiceID,
-                ) else {
+                guard
+                    let serviceId = ServiceId.parseFrom(
+                        serviceIdBinary: recipient.destinationServiceIDBinary,
+                        serviceIdString: recipient.destinationServiceID,
+                    )
+                else {
                     owsFailDebug("Missing UUID for story recipient")
                     continue
                 }
@@ -659,7 +651,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
                     newRecipientStates[serviceId] = .init(
                         allowsReplies: recipient.isAllowedToReply,
                         contexts: newContexts,
-                        sendingState: .sent // This was sent by our linked device
+                        sendingState: .sent, // This was sent by our linked device
                     )
                 }
             }
@@ -680,9 +672,9 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
 
     public func updateRecipientStatesWithOutgoingMessageStates(
         _ outgoingMessageStates: [SignalServiceAddress: TSOutgoingMessageRecipientState]?,
-        transaction: DBWriteTransaction
+        transaction: DBWriteTransaction,
     ) {
-        guard let outgoingMessageStates = outgoingMessageStates else { return }
+        guard let outgoingMessageStates else { return }
 
         notifyingOfFailureIfNeeded(transaction: transaction) { firstFailedThread in
             anyUpdate(transaction: transaction) { message in
@@ -746,7 +738,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
 
     private func notifyingOfFailureIfNeeded(
         transaction: DBWriteTransaction,
-        _ block: (_ firstFailedThread: inout TSThread?) -> Void
+        _ block: (_ firstFailedThread: inout TSThread?) -> Void,
     ) {
         let wasFailedSendBeforeUpdate = sendingState == .failed
         var firstFailedThread: TSThread?
@@ -758,7 +750,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
             SSKEnvironment.shared.notificationPresenterRef.notifyUser(
                 forFailedStorySend: self,
                 to: firstFailedThread,
-                transaction: transaction
+                transaction: transaction,
             )
         } else if wasFailedSendBeforeUpdate, sendingState != .failed {
             SSKEnvironment.shared.notificationPresenterRef.cancelNotifications(for: self)
@@ -772,7 +764,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
     public func threads(transaction: DBReadTransaction) -> [TSThread] {
         switch manifest {
         case .incoming:
-            if let groupId = groupId, let groupThread = TSGroupThread.fetch(groupId: groupId, transaction: transaction) {
+            if let groupId, let groupThread = TSGroupThread.fetch(groupId: groupId, transaction: transaction) {
                 return [groupThread]
             } else if let contactThread = TSContactThread.getWithContactAddress(SignalServiceAddress(authorAci), transaction: transaction) {
                 return [contactThread]
@@ -781,7 +773,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
                 return []
             }
         case .outgoing(let recipientStates):
-            if let groupId = groupId, let groupThread = TSGroupThread.fetch(groupId: groupId, transaction: transaction) {
+            if let groupId, let groupThread = TSGroupThread.fetch(groupId: groupId, transaction: transaction) {
                 return [groupThread]
             }
             return Set(recipientStates.values.flatMap({ $0.contexts })).compactMap { context in
@@ -823,10 +815,10 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
                 thread: thread,
                 storyMessage: self,
                 skippedRecipients: [],
-                transaction: transaction
+                transaction: transaction,
             )
             let preparedMessage = PreparedOutgoingMessage.preprepared(
-                transientMessageWithoutAttachments: deleteMessage
+                transientMessageWithoutAttachments: deleteMessage,
             )
             SSKEnvironment.shared.messageSenderJobQueueRef.add(message: preparedMessage, transaction: transaction)
             anyRemove(transaction: transaction)
@@ -864,10 +856,10 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
                 thread: thread,
                 storyMessage: self,
                 skippedRecipients: skippedRecipients.map { ServiceIdObjC.wrapValue($0) },
-                transaction: transaction
+                transaction: transaction,
             )
             let preparedDeleteMessage = PreparedOutgoingMessage.preprepared(
-                transientMessageWithoutAttachments: deleteMessage
+                transientMessageWithoutAttachments: deleteMessage,
             )
             SSKEnvironment.shared.messageSenderJobQueueRef.add(message: preparedDeleteMessage, transaction: transaction)
 
@@ -884,10 +876,10 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
                 localThread: TSContactThread.getOrCreateLocalThread(transaction: transaction)!,
                 timestamp: timestamp,
                 recipientStates: recipientStates,
-                transaction: transaction
+                transaction: transaction,
             )
             let preparedTranscriptMessage = PreparedOutgoingMessage.preprepared(
-                transientMessageWithoutAttachments: sentTranscriptUpdate
+                transientMessageWithoutAttachments: sentTranscriptUpdate,
             )
             SSKEnvironment.shared.messageSenderJobQueueRef.add(message: preparedTranscriptMessage, transaction: transaction)
         default:
@@ -911,28 +903,28 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
         Logger.info("Resending story message \(timestamp)")
 
         let messages: [OutgoingStoryMessage]
-        if let groupId = groupId, let groupThread = TSGroupThread.fetch(groupId: groupId, transaction: transaction) {
+        if let groupId, let groupThread = TSGroupThread.fetch(groupId: groupId, transaction: transaction) {
             messages = [
                 OutgoingStoryMessage(
                     thread: groupThread,
                     storyMessage: self,
                     storyMessageRowId: self.id!,
                     skipSyncTranscript: false,
-                    transaction: transaction
-                )
+                    transaction: transaction,
+                ),
             ]
         } else {
             let contexts = Set(recipientStates.values.flatMap({ $0.contexts }))
             let privateStoryThreads = contexts.compactMap {
                 TSPrivateStoryThread.anyFetchPrivateStoryThread(
                     uniqueId: $0.uuidString,
-                    transaction: transaction
+                    transaction: transaction,
                 )
             }
             messages = OutgoingStoryMessage.createDedupedOutgoingMessages(
                 for: self,
                 sendingTo: privateStoryThreads,
-                tx: transaction
+                tx: transaction,
             )
         }
 
@@ -944,7 +936,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
 
         messages.forEach { message in
             let preparedMessage = PreparedOutgoingMessage.preprepared(
-                outgoingStoryMessage: message
+                outgoingStoryMessage: message,
             )
             SSKEnvironment.shared.messageSenderJobQueueRef.add(message: preparedMessage, transaction: transaction)
         }
@@ -973,7 +965,7 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
     public static func anyEnumerateObjc(
         transaction: DBReadTransaction,
         batched: Bool,
-        block: @escaping (StoryMessage, UnsafeMutablePointer<ObjCBool>) -> Void
+        block: @escaping (StoryMessage, UnsafeMutablePointer<ObjCBool>) -> Void,
     ) {
         let batchingPreference: BatchingPreference = batched ? .batched() : .unbatched
         anyEnumerate(transaction: transaction, batchingPreference: batchingPreference, block: block)
@@ -1001,12 +993,12 @@ public final class StoryMessage: NSObject, SDSCodableModel, Decodable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
 
-        if let id = id { try container.encode(id, forKey: .id) }
+        if let id { try container.encode(id, forKey: .id) }
         try container.encode(Self.recordType, forKey: .recordType)
         try container.encode(uniqueId, forKey: .uniqueId)
         try container.encode(timestamp, forKey: .timestamp)
         try container.encode(authorAci.rawUUID, forKey: .authorAci)
-        if let groupId = groupId { try container.encode(groupId, forKey: .groupId) }
+        if let groupId { try container.encode(groupId, forKey: .groupId) }
         try container.encode(direction, forKey: .direction)
         try container.encode(CodableStoryManifest(manifest), forKey: .manifest)
         try container.encode(_attachment, forKey: .attachment)
@@ -1054,7 +1046,7 @@ public struct StoryReceivedState: Codable {
         allowsReplies: Bool,
         receivedTimestamp: UInt64?,
         readTimestamp: UInt64? = nil,
-        viewedTimestamp: UInt64? = nil
+        viewedTimestamp: UInt64? = nil,
     ) {
         self.allowsReplies = allowsReplies
         self.receivedTimestamp = receivedTimestamp
@@ -1158,9 +1150,9 @@ extension StoryMessage {
         return String(
             format: OWSLocalizedString(
                 "STORY_VIDEO_SEGMENTATION_TOOLTIP_FORMAT",
-                comment: "Tooltip text shown when the user selects a story as a destination for a long duration video that will be split into shorter segments. Embeds {{ segment duration in seconds }}"
+                comment: "Tooltip text shown when the user selects a story as a destination for a long duration video that will be split into shorter segments. Embeds {{ segment duration in seconds }}",
             ),
-            Int(videoAttachmentDurationLimit)
+            Int(videoAttachmentDurationLimit),
         )
     }
 }
@@ -1171,6 +1163,6 @@ extension SSKProtoAttachmentPointer {
         guard self.hasFlags, self.flags < Int32.max else {
             return false
         }
-        return (Int32(self.flags)) & SSKProtoAttachmentPointerFlags.gif.rawValue > 0
+        return Int32(self.flags) & SSKProtoAttachmentPointerFlags.gif.rawValue > 0
     }
 }
